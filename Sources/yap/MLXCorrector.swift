@@ -65,10 +65,9 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
 
     private func buildPrompt(text: String, context: ScreenContext) -> String {
         var prompt = """
-            You are a transcription corrector. Given a speech transcription and screenshots of the user's displays, \
-            correct any misrecognized words. Focus on technical terms, proper nouns, and words visible on screen. \
-            Preserve the original meaning. Only fix recognition errors, do not rephrase. \
-            Output ONLY the corrected text, nothing else.
+            Fix this voice transcription using the screenshots. \
+            Fix misrecognized words, add punctuation, remove fillers (えーと, あの, まあ). \
+            Output ONLY the corrected text.
 
             """
 

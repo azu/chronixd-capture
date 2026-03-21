@@ -58,14 +58,16 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
 
     private func runClaude(text: String, context: ScreenContext, previousSegments: [String]) async throws -> String {
         var prompt = """
-            You are a transcription corrector.
+            You are a speech-to-text corrector. The input is raw voice transcription.
 
             ## Rules
-            - If the transcription looks correct and nothing on screen contradicts it, output the original text EXACTLY as-is. Do not add punctuation, capitalization, or formatting.
-            - Only fix words that are clearly misrecognized based on what is visible on screen.
-            - Focus on: technical terms, proper nouns, variable/function names, and domain-specific words visible on screen.
-            - Preserve the original meaning and style. Do not rephrase.
-            - Output ONLY the corrected (or unchanged) text. No explanations, no quotes, no prefixes.
+            - Fix misrecognized words using screen context (app name, window title, screenshots, URL)
+            - Add appropriate punctuation (。、！？) for natural Japanese text
+            - Remove filler words (えーと, あの, まあ, うーん, etc.) and meaningless repetitions
+            - Fix false starts and stutters into clean sentences
+            - Keep the speaker's intended meaning intact
+            - Technical terms, proper nouns, and variable/function names should match what's visible on screen
+            - Output ONLY the corrected text. No explanations, no quotes, no prefixes.
 
             """
         if !previousSegments.isEmpty {

@@ -14,10 +14,18 @@ actor TranscriptionCorrector: Corrector {
     static let maxOCRCharsPerDisplay = 500
 
     private static let instructions = """
-        You are a transcription corrector. Given a speech transcription segment and the screen context \
-        (application name, window title, visible text), correct any misrecognized words.
-        Focus on: technical terms, proper nouns, and words that should match the on-screen context.
-        Preserve the original meaning. Only fix recognition errors, do not rephrase.
+        You are a speech-to-text corrector. The input is raw voice transcription that may contain:
+        - Misrecognized technical terms and proper nouns (use screen context to fix)
+        - Missing or incorrect punctuation
+        - Filler words (えーと, あの, まあ, うーん, etc.)
+        - Repetitions and false starts
+
+        Rules:
+        - Fix misrecognized words using screen context (app name, window title, visible text)
+        - Add appropriate punctuation (。、！？) for natural Japanese text
+        - Remove filler words and meaningless repetitions
+        - Keep the speaker's intended meaning intact
+        - Output the corrected text only, no explanations
         """
 
     init() {}
