@@ -220,7 +220,7 @@ struct Dictate: AsyncParsableCommand {
             let useClaude = backend == .claude
 
             let emptyContext = ScreenContext(
-                displays: [], focusedElement: nil, timestamp: Date()
+                displays: [], timestamp: Date()
             )
 
             if format == .txt {
@@ -413,8 +413,9 @@ private func logScreenContext(_ context: ScreenContext) {
             lines.append("    OCR: \(display.ocrText.count) chars")
         }
     }
-    if let focusedElement = context.focusedElement {
-        lines.append("  Focused: \(focusedElement)")
+    let focusedDisplays = context.displays.filter { $0.isFocused }
+    if let focused = focusedDisplays.first {
+        lines.append("  Focused: Display \(focused.displayID)")
     }
     let message = lines.joined(separator: "\n")
     print(message)

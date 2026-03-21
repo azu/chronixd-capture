@@ -40,6 +40,7 @@ actor TranscriptionCorrector {
     private func performCorrection(text: String, context: ScreenContext) async throws -> String {
         var prompt = "Transcription: \(text)\n\nScreen context:\n"
         for display in context.displays {
+            prompt += display.isFocused ? "### Focused Display\n" : "### Display\n"
             if let appName = display.appName {
                 prompt += "Application: \(appName)\n"
             }
@@ -53,9 +54,6 @@ actor TranscriptionCorrector {
                 prompt += "Screen text:\n\(display.ocrText)\n"
             }
             prompt += "\n"
-        }
-        if let focusedElement = context.focusedElement {
-            prompt += "Focused element: \(focusedElement)\n"
         }
 
         let result = try await session.respond(

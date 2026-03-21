@@ -37,8 +37,8 @@ final class ClaudeCorrector: Sendable {
             ## Screen Context
 
             """
-        for (i, display) in context.displays.enumerated() {
-            prompt += "### Display \(i + 1)\n"
+        for display in context.displays {
+            prompt += display.isFocused ? "### Focused Display\n" : "### Display\n"
             if let appName = display.appName {
                 prompt += "Application: \(appName)\n"
             }
@@ -52,9 +52,6 @@ final class ClaudeCorrector: Sendable {
                 prompt += "Screenshot (read this file): \(path)\n"
             }
             prompt += "\n"
-        }
-        if let focusedElement = context.focusedElement {
-            prompt += "Focused element: \(focusedElement)\n"
         }
 
         let process = Process()

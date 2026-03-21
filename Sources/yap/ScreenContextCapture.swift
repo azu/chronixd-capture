@@ -14,6 +14,8 @@ struct DisplayContext: Sendable {
     let screenshotPath: String?
     /// Whether this display appears to be playing media (video/streaming site).
     let isPlayingMedia: Bool
+    /// Whether this display has the key window (user focus).
+    let isFocused: Bool
 }
 
 /// Default keywords to detect media/video sites in window titles.
@@ -25,7 +27,6 @@ let defaultMediaTitleKeywords = [
 
 struct ScreenContext: Sendable {
     let displays: [DisplayContext]
-    let focusedElement: String?
     let timestamp: Date
 }
 
@@ -44,26 +45,18 @@ final class ScreenContextCapture: Sendable {
     @MainActor
     func capture() async throws -> ScreenContext {
         let windowsByDisplay = captureVisibleWindows()
-        let focusedElement = captureFocusedElement()
-        let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords)
-        return ScreenContext(
-            displays: displays,
-            focusedElement: focusedElement,
-            timestamp: Date()
-        )
+        let focusedDisplayID = activeDisplayID()
+        let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
+        return ScreenContext(displays: displays, timestamp: Date())
     }
 
     /// Capture screen context with screenshots only, no OCR (for claude mode).
     @MainActor
     func captureWithScreenshots() async throws -> ScreenContext {
         let windowsByDisplay = captureVisibleWindows()
-        let focusedElement = captureFocusedElement()
-        let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords)
-        return ScreenContext(
-            displays: displays,
-            focusedElement: focusedElement,
-            timestamp: Date()
-        )
+        let focusedDisplayID = activeDisplayID()
+        let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
+        return ScreenContext(displays: displays, timestamp: Date())
     }
 
     func isMediaTitle(_ title: String?) -> Bool {
@@ -176,19 +169,14 @@ private func axWindowTitle(for pid: Int32) -> String? {
     return titleValue as? String
 }
 
-/// Get the focused UI element text from the frontmost app via Accessibility API.
+/// Returns the CGDirectDisplayID of the display containing the key window.
 @MainActor
-private func captureFocusedElement() -> String? {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-    let axApp = AXUIElementCreateApplication(app.processIdentifier)
-    var focusedValue: CFTypeRef?
-    AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedValue)
-    guard let focused = focusedValue else { return nil }
-    var valueRef: CFTypeRef?
-    // swiftlint:disable:next force_cast
-    AXUIElementCopyAttributeValue(focused as! AXUIElement, kAXValueAttribute as CFString, &valueRef)
-    guard let value = valueRef as? String else { return nil }
-    return String(value.prefix(500))
+private func activeDisplayID() -> CGDirectDisplayID {
+    if let mainScreen = NSScreen.main,
+       let screenNumber = mainScreen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+        return screenNumber
+    }
+    return CGMainDisplayID()
 }
 
 // MARK: - OCR Screen Capture
@@ -197,7 +185,8 @@ private func captureFocusedElement() -> String? {
 private func captureAllDisplays(
     ocr: Bool,
     windowsByDisplay: [CGDirectDisplayID: (appName: String, windowTitle: String?)],
-    mediaTitleKeywords: [String]
+    mediaTitleKeywords: [String],
+    focusedDisplayID: CGDirectDisplayID
 ) async throws -> [DisplayContext] {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     guard !content.displays.isEmpty else { return [] }
@@ -249,7 +238,8 @@ private func captureAllDisplays(
             windowTitle: windowInfo?.windowTitle,
             ocrText: ocrText,
             screenshotPath: screenshotPath,
-            isPlayingMedia: isMedia
+            isPlayingMedia: isMedia,
+            isFocused: display.displayID == focusedDisplayID
         ))
     }
 
