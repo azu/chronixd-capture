@@ -219,7 +219,9 @@ struct Dictate: AsyncParsableCommand {
                 tcsetattr(STDIN_FILENO, TCSANOW, &savedTermios)
             }
             capture.stop()
-            try? await analyzer.finalizeAndFinishThroughEndOfInput()
+            if !capture.isMuted {
+                try? await analyzer.finalizeAndFinishThroughEndOfInput()
+            }
         }
 
         // Stream results as they arrive
@@ -253,6 +255,9 @@ struct Dictate: AsyncParsableCommand {
                 displays: [], timestamp: Date()
             )
 
+            // Timestamp of last unmute — results before this are stale (from pre-mute buffer)
+            nonisolated(unsafe) var lastUnmuteTime = Date.distantPast
+
             // Background task: poll media playback state every 2 seconds
             // Mutes mic when any media is actively playing (NowPlaying playbackRate > 0)
             nonisolated(unsafe) let muteCaptureRef = capture
@@ -263,6 +268,10 @@ struct Dictate: AsyncParsableCommand {
                     let shouldMute = await AudioOutputDetector.isMediaPlaying()
                     if muteCaptureRef.isMuted != shouldMute {
                         muteCaptureRef.isMuted = shouldMute
+                        if !shouldMute {
+                            // Record unmute time — discard results that arrived before this
+                            lastUnmuteTime = Date()
+                        }
                         if mediaCheckDebug {
                             let msg = shouldMute
                                 ? "[context-aware] Media playing, muting mic"
@@ -296,6 +305,15 @@ struct Dictate: AsyncParsableCommand {
                         screenContext = emptyContext
                     }
                     lastResultTime = now
+
+                    // Discard stale results from before unmute (pre-mute audio buffer)
+                    if now < lastUnmuteTime {
+                        if showDebug {
+                            print("[context-aware] Discarding stale result (pre-mute buffer)")
+                            fflush(stdout)
+                        }
+                        continue
+                    }
 
                     if showDebug {
                         print("[context-aware] Mic muted: \(capture.isMuted)")
