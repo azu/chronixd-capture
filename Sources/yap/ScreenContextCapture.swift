@@ -11,6 +11,8 @@ struct ScreenContext: Sendable {
     let windowTitle: String?
     let focusedElement: String?
     let ocrText: String
+    /// File paths to screenshot PNGs (one per display). Used by claude mode.
+    let screenshotPaths: [String]
     let timestamp: Date
 }
 
@@ -19,15 +21,32 @@ struct ScreenContext: Sendable {
 final class ScreenContextCapture: Sendable {
     static let maxOCRLength = 2000
 
+    /// Capture screen context with Vision OCR (for local mode).
     @MainActor
     func capture() async throws -> ScreenContext {
         let info = captureAccessibilityInfo()
-        let text = try await captureAllDisplaysOCRText()
+        let (text, paths) = try await captureAllDisplays(ocr: true)
         return ScreenContext(
             appName: info.appName,
             windowTitle: info.windowTitle,
             focusedElement: info.focusedElement,
             ocrText: text,
+            screenshotPaths: paths,
+            timestamp: Date()
+        )
+    }
+
+    /// Capture screen context with screenshots only, no OCR (for claude mode).
+    @MainActor
+    func captureWithScreenshots() async throws -> ScreenContext {
+        let info = captureAccessibilityInfo()
+        let (_, paths) = try await captureAllDisplays(ocr: false)
+        return ScreenContext(
+            appName: info.appName,
+            windowTitle: info.windowTitle,
+            focusedElement: info.focusedElement,
+            ocrText: "",
+            screenshotPaths: paths,
             timestamp: Date()
         )
     }
@@ -77,24 +96,41 @@ private func captureAccessibilityInfo() -> AccessibilityInfo {
 
 // MARK: - OCR Screen Capture
 
-/// Capture OCR text from all connected displays, concatenated.
-private func captureAllDisplaysOCRText() async throws -> String {
+/// Capture all displays. Returns (ocrText, screenshotPaths).
+/// When `ocr` is false, OCR is skipped and ocrText is empty.
+private func captureAllDisplays(ocr: Bool) async throws -> (String, [String]) {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-    guard !content.displays.isEmpty else { return "" }
+    guard !content.displays.isEmpty else { return ("", []) }
 
-    var results: [String] = []
+    var ocrResults: [String] = []
+    var paths: [String] = []
+
     for display in content.displays {
-        let text = try await captureOCRTextForDisplay(display)
-        if !text.isEmpty {
-            results.append(text)
+        let image = try await captureDisplayImage(display)
+
+        // Save screenshot to temp file
+        let path = NSTemporaryDirectory() + "yap-screenshot-\(display.displayID).png"
+        if let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil) {
+            CGImageDestinationAddImage(dest, image, nil)
+            if CGImageDestinationFinalize(dest) {
+                paths.append(path)
+            }
+        }
+
+        if ocr {
+            let text = try await performOCR(on: image)
+            if !text.isEmpty {
+                ocrResults.append(text)
+            }
         }
     }
 
-    let combined = results.joined(separator: "\n")
-    return String(combined.prefix(ScreenContextCapture.maxOCRLength))
+    let combined = ocrResults.joined(separator: "\n")
+    let ocrText = String(combined.prefix(ScreenContextCapture.maxOCRLength))
+    return (ocrText, paths)
 }
 
-private func captureOCRTextForDisplay(_ display: SCDisplay) async throws -> String {
+private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {
     let filter = SCContentFilter(display: display, excludingWindows: [])
     let config = SCStreamConfiguration()
     config.width = Int(display.width)
@@ -102,12 +138,10 @@ private func captureOCRTextForDisplay(_ display: SCDisplay) async throws -> Stri
     config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
     config.capturesAudio = false
 
-    let image = try await SCScreenshotManager.captureImage(
+    return try await SCScreenshotManager.captureImage(
         contentFilter: filter,
         configuration: config
     )
-
-    return try await performOCR(on: image)
 }
 
 private func performOCR(on image: CGImage) async throws -> String {

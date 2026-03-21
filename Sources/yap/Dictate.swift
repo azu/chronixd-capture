@@ -8,6 +8,22 @@ import Speech
 
 private nonisolated(unsafe) var dictateSignalWriteFD: Int32 = -1
 
+// MARK: - CorrectorBackend
+
+enum CorrectorBackend: String, ExpressibleByArgument, Sendable {
+    case local
+    case claude
+}
+
+// MARK: - Corrector Protocol
+
+protocol Corrector: Sendable {
+    func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String)
+}
+
+extension TranscriptionCorrector: Corrector {}
+extension ClaudeCorrector: Corrector {}
+
 // MARK: - Dictate
 
 struct Dictate: AsyncParsableCommand {
@@ -38,9 +54,10 @@ struct Dictate: AsyncParsableCommand {
         help: "Include word-level timestamps in JSON output."
     ) var wordTimestamps: Bool = false
 
-    @Flag(
-        help: "Use screen context to improve transcription accuracy with on-device LLM."
-    ) var contextAware: Bool = false
+    @Option(
+        name: .long,
+        help: "Use screen context to improve transcription accuracy. Values: local (on-device LLM), claude (claude CLI)."
+    ) var contextAware: CorrectorBackend? = nil
 
     @Flag(
         name: .long,
@@ -52,9 +69,11 @@ struct Dictate: AsyncParsableCommand {
             throw Transcribe.Error.speechTranscriberNotAvailable
         }
 
-        if contextAware {
-            guard SystemLanguageModel.default.availability == .available else {
-                throw DictateError.languageModelNotAvailable
+        if let backend = contextAware {
+            if backend == .local {
+                guard SystemLanguageModel.default.availability == .available else {
+                    throw DictateError.languageModelNotAvailable
+                }
             }
             guard AXIsProcessTrusted() else {
                 throw DictateError.accessibilityPermissionDenied
@@ -80,7 +99,7 @@ struct Dictate: AsyncParsableCommand {
             locale: locale,
             transcriptionOptions: censor ? [.etiquetteReplacements] : [],
             reportingOptions: [],
-            attributeOptions: (outputFormat.needsAudioTimeRange || contextAware) ? [.audioTimeRange] : []
+            attributeOptions: (outputFormat.needsAudioTimeRange || contextAware != nil) ? [.audioTimeRange] : []
         )
         let modules: [any SpeechModule] = [transcriber]
 
@@ -179,12 +198,21 @@ struct Dictate: AsyncParsableCommand {
         // Stream results as they arrive
         let format = outputFormat
         let sentenceMaxLength = maxLength
-        let useContextAware = contextAware
+        let backend = contextAware
         let showDebug = debug
 
-        if useContextAware {
+        if let backend {
             let screenCapture = ScreenContextCapture()
-            let corrector = TranscriptionCorrector()
+            let corrector: any Corrector = switch backend {
+            case .local: TranscriptionCorrector()
+            case .claude: ClaudeCorrector()
+            }
+            let useClaude = backend == .claude
+
+            let emptyContext = ScreenContext(
+                appName: nil, windowTitle: nil, focusedElement: nil,
+                ocrText: "", screenshotPaths: [], timestamp: Date()
+            )
 
             if format == .txt {
                 var lastResultTime = Date.distantPast
@@ -192,16 +220,16 @@ struct Dictate: AsyncParsableCommand {
                     let now = Date()
                     let screenContext: ScreenContext
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
-                        screenContext = (try? await screenCapture.capture()) ?? ScreenContext(
-                            appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: now
-                        )
+                        if useClaude {
+                            screenContext = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
+                        } else {
+                            screenContext = (try? await screenCapture.capture()) ?? emptyContext
+                        }
                         if showDebug {
                             logScreenContext(screenContext)
                         }
                     } else {
-                        screenContext = ScreenContext(
-                            appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: now
-                        )
+                        screenContext = emptyContext
                     }
                     lastResultTime = now
 
@@ -224,14 +252,16 @@ struct Dictate: AsyncParsableCommand {
                 let includeWords = wordTimestamps
                 var segmentIndex = 0
                 var lastResultTime = Date.distantPast
-                var currentContext = ScreenContext(
-                    appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: Date()
-                )
+                var currentContext = emptyContext
 
                 for try await result in transcriber.results {
                     let now = Date()
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
-                        currentContext = (try? await screenCapture.capture()) ?? currentContext
+                        if useClaude {
+                            currentContext = (try? await screenCapture.captureWithScreenshots()) ?? currentContext
+                        } else {
+                            currentContext = (try? await screenCapture.capture()) ?? currentContext
+                        }
                         if showDebug {
                             logScreenContext(currentContext)
                         }
@@ -328,6 +358,9 @@ private func logScreenContext(_ context: ScreenContext) {
     if !context.ocrText.isEmpty {
         lines.append("  OCR (\(context.ocrText.count) chars):")
         lines.append(context.ocrText)
+    }
+    if !context.screenshotPaths.isEmpty {
+        lines.append("  Screenshots: \(context.screenshotPaths.joined(separator: ", "))")
     }
     let message = lines.joined(separator: "\n")
     print(message)
