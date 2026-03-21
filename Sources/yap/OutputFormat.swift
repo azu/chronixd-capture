@@ -115,6 +115,65 @@ enum OutputFormat: String, EnumerableFlag {
         }
     }
 
+    /// Format a segment with correction information.
+    /// When `original == corrected`, output matches the standard format.
+    func formatCorrectedSegment(
+        index: Int,
+        timeRange: CMTimeRange,
+        original: String,
+        corrected: String,
+        speaker: String? = nil,
+        words: [(text: String, timeRange: CMTimeRange)]? = nil
+    ) -> String {
+        let correctionApplied = original != corrected
+        switch self {
+        case .txt:
+            if correctionApplied {
+                return "\(original) → \(corrected)"
+            }
+            return corrected
+        case .srt:
+            let content = speaker.map { "\($0): \(corrected)" } ?? corrected
+            var output = "\(index)\n\(Self.srtTime(timeRange.start.seconds)) --> \(Self.srtTime(timeRange.end.seconds))\n\(content)"
+            if correctionApplied {
+                output += "\nNOTE: Original: \(original)"
+            }
+            return output
+        case .vtt:
+            let content = speaker.map { "<v \($0)>\(corrected)" } ?? corrected
+            var output = "\(index)\n\(Self.vttTime(timeRange.start.seconds)) --> \(Self.vttTime(timeRange.end.seconds))\n\(content)"
+            if correctionApplied {
+                output += "\nNOTE Original: \(original)"
+            }
+            return output
+        case .json:
+            var dict: [String: Any] = [
+                "id": index,
+                "start": Self.jsonTime(timeRange.start.seconds),
+                "end": Self.jsonTime(timeRange.end.seconds),
+                "text": corrected,
+                "original": original,
+                "corrected": corrected,
+                "correctionApplied": correctionApplied,
+            ]
+            if let speaker { dict["speaker"] = speaker }
+            if let words {
+                dict["words"] = words.map { word in
+                    [
+                        "text": word.text,
+                        "start": Self.jsonTime(word.timeRange.start.seconds),
+                        "end": Self.jsonTime(word.timeRange.end.seconds),
+                    ] as [String: Any]
+                }
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
+               let str = String(data: data, encoding: .utf8) {
+                return str.components(separatedBy: "\n").map { "    " + $0 }.joined(separator: "\n")
+            }
+            return "    {}"
+        }
+    }
+
     // MARK: Buffered API (used by transcribe command)
 
     func text(
