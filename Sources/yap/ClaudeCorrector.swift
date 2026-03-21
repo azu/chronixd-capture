@@ -2,6 +2,9 @@ import Foundation
 
 /// Corrects transcription using `claude -p` CLI with multimodal input (screenshots).
 final class ClaudeCorrector: Sendable {
+    /// Timeout in seconds for each claude invocation.
+    static let timeoutSeconds: Double = 30
+
     func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String) {
         do {
             let corrected = try await runClaude(text: text, context: context)
@@ -56,6 +59,7 @@ final class ClaudeCorrector: Sendable {
             "--no-session-persistence",
             "--disable-slash-commands",
             "--dangerously-skip-permissions",
+            "--setting-sources", "",
             prompt,
         ]
 
@@ -65,7 +69,22 @@ final class ClaudeCorrector: Sendable {
         process.standardError = stderr
 
         return try await withCheckedThrowingContinuation { continuation in
+            var resumed = false
+
+            // Timeout: kill process if it takes too long
+            let timeoutWork = DispatchWorkItem { [weak process] in
+                guard let process, process.isRunning else { return }
+                process.terminate()
+            }
+            DispatchQueue.global().asyncAfter(
+                deadline: .now() + Self.timeoutSeconds,
+                execute: timeoutWork
+            )
+
             process.terminationHandler = { _ in
+                timeoutWork.cancel()
+                guard !resumed else { return }
+                resumed = true
                 let data = stdout.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
                 continuation.resume(returning: output)
@@ -73,6 +92,9 @@ final class ClaudeCorrector: Sendable {
             do {
                 try process.run()
             } catch {
+                timeoutWork.cancel()
+                guard !resumed else { return }
+                resumed = true
                 continuation.resume(throwing: error)
             }
         }
