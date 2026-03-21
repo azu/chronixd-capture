@@ -45,6 +45,9 @@ final class ClaudeCorrector: Sendable {
             if let windowTitle = display.windowTitle {
                 prompt += "Window: \(windowTitle)\n"
             }
+            if let url = display.url {
+                prompt += "URL: \(url)\n"
+            }
             if display.isPlayingMedia {
                 prompt += "⚠️ This display is playing media/video. Audio from the video may be mixed in. Focus on correcting the user's own speech, not video dialogue.\n"
             }

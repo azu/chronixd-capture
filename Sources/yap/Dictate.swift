@@ -417,6 +417,9 @@ private func logScreenContext(_ context: ScreenContext) {
         if let windowTitle = display.windowTitle {
             lines.append("    Window: \(windowTitle)")
         }
+        if let url = display.url {
+            lines.append("    URL: \(url)")
+        }
         if let path = display.screenshotPath {
             lines.append("    Screenshot: \(path)")
         }

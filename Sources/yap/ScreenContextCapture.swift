@@ -10,6 +10,7 @@ struct DisplayContext: Sendable {
     let displayID: CGDirectDisplayID
     let appName: String?
     let windowTitle: String?
+    let url: String?
     let ocrText: String
     let screenshotPath: String?
     /// Whether this display appears to be playing media (video/streaming site).
@@ -74,16 +75,22 @@ final class ScreenContextCapture: Sendable {
 
 // MARK: - Window Info Capture
 
+struct WindowEntry {
+    let appName: String
+    let windowTitle: String?
+    let pid: Int32
+}
+
 /// Get the top-most user window per display using CGWindowListCopyWindowInfo.
 /// Returns a dictionary keyed by display ID.
-func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, windowTitle: String?)] {
+func captureVisibleWindows() -> [CGDirectDisplayID: WindowEntry] {
     guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
         return [:]
     }
 
     let myPID = ProcessInfo.processInfo.processIdentifier
     var seenDisplays = Set<CGDirectDisplayID>()
-    var results: [CGDirectDisplayID: (appName: String, windowTitle: String?)] = [:]
+    var results: [CGDirectDisplayID: WindowEntry] = [:]
 
     for window in windowList {
         // layer 0 = normal windows, negative = fullscreen/spaces. Skip high layers (system overlays like Dock, menubar)
@@ -137,7 +144,7 @@ func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, windowTitl
         if seenDisplays.contains(displayID) {
             // Already have an entry. Only replace if the new one has a title and the old one doesn't.
             if hasTitle, let existing = results[displayID], (existing.windowTitle ?? "").isEmpty {
-                results[displayID] = (appName: appName, windowTitle: windowTitle)
+                results[displayID] = WindowEntry(appName: appName, windowTitle: windowTitle, pid: pid)
             }
             continue
         }
@@ -149,7 +156,7 @@ func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, windowTitl
             resolvedTitle = axWindowTitle(for: pid)
         }
 
-        results[displayID] = (appName: appName, windowTitle: resolvedTitle)
+        results[displayID] = WindowEntry(appName: appName, windowTitle: resolvedTitle, pid: pid)
     }
 
     return results
@@ -175,6 +182,55 @@ private func axWindowTitle(for pid: Int32) -> String? {
     return titleValue as? String
 }
 
+/// Known browser app names.
+private let browserAppNames = Set([
+    "Firefox", "Safari",
+    "Google Chrome", "Google Chrome Dev", "Google Chrome Canary", "Google Chrome Beta",
+    "Chromium",
+    "Arc", "Brave Browser", "Microsoft Edge", "Orion", "Vivaldi", "Opera",
+])
+
+/// Extract URL from a browser's address bar via Accessibility API.
+/// Searches for AXComboBox or AXTextField with a URL-like value.
+private func axBrowserURL(for pid: Int32) -> String? {
+    let axApp = AXUIElementCreateApplication(pid)
+
+    // Search up to depth 5 for URL bar
+    func findURL(_ element: AXUIElement, depth: Int = 0) -> String? {
+        guard depth < 5 else { return nil }
+
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? ""
+
+        if role == "AXComboBox" || role == "AXTextField" {
+            var valueRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
+            if let value = valueRef as? String, looksLikeURL(value) {
+                return value
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
+        guard let children = childrenRef as? [AXUIElement] else { return nil }
+        for child in children {
+            if let url = findURL(child, depth: depth + 1) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    return findURL(axApp)
+}
+
+private func looksLikeURL(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespaces)
+    // Matches "domain.tld/..." or "scheme://..."
+    return trimmed.contains("://") || (trimmed.contains(".") && !trimmed.contains(" ") && trimmed.count > 5)
+}
+
 /// Returns the CGDirectDisplayID of the display containing the key window.
 @MainActor
 private func activeDisplayID() -> CGDirectDisplayID {
@@ -190,7 +246,7 @@ private func activeDisplayID() -> CGDirectDisplayID {
 /// Capture all displays and return per-display context with matched window info.
 private func captureAllDisplays(
     ocr: Bool,
-    windowsByDisplay: [CGDirectDisplayID: (appName: String, windowTitle: String?)],
+    windowsByDisplay: [CGDirectDisplayID: WindowEntry],
     mediaTitleKeywords: [String],
     focusedDisplayID: CGDirectDisplayID
 ) async throws -> [DisplayContext] {
@@ -244,10 +300,18 @@ private func captureAllDisplays(
         }
         let isMedia = titleMatch || appMatch
 
+        // Extract URL from browser address bar
+        let url: String? = if let info = windowInfo, browserAppNames.contains(info.appName) {
+            axBrowserURL(for: info.pid)
+        } else {
+            nil
+        }
+
         results.append(DisplayContext(
             displayID: display.displayID,
             appName: windowInfo?.appName,
             windowTitle: windowInfo?.windowTitle,
+            url: url,
             ocrText: ocrText,
             screenshotPath: screenshotPath,
             isPlayingMedia: isMedia,
