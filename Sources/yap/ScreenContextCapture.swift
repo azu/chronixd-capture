@@ -268,6 +268,7 @@ private func performOCR(on image: CGImage) async throws -> String {
         }
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["ja", "en"]
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         do {
