@@ -66,23 +66,30 @@ actor TranscriptionCorrector {
         return result.content.corrected
     }
 
-    /// Execute an async closure with a timeout. Cancels the operation on timeout.
+    /// Execute an async closure with a timeout. Returns nil on timeout.
     private func withTimeout<T: Sendable>(
         seconds: UInt64,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        let task = Task { try await operation() }
-        let timeoutTask = Task {
-            try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-            task.cancel()
-        }
-        do {
-            let result = try await task.value
-            timeoutTask.cancel()
-            return result
-        } catch {
-            timeoutTask.cancel()
-            throw error
+        try await withThrowingTaskGroup(of: T?.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                return nil
+            }
+            // First to complete wins
+            while let result = try await group.next() {
+                if let value = result {
+                    group.cancelAll()
+                    return value
+                }
+                // Timeout task returned nil
+                group.cancelAll()
+                throw CancellationError()
+            }
+            throw CancellationError()
         }
     }
 }
