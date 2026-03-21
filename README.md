@@ -179,6 +179,95 @@ yap dictate
 yap dictate > notes.txt
 ```
 
+### Context-Aware Dictation
+
+`yap dictate --context-aware` uses screen context (screenshots, window titles, URLs) to correct transcription with an LLM. Three backends are available:
+
+| Backend | Flag | Model | Image Input | Cost |
+|---------|------|-------|-------------|------|
+| local | `--context-aware local` | Apple FoundationModels (~3B) | No (OCR text) | Free |
+| claude | `--context-aware claude` | Claude via `claude -p` | Yes (screenshots) | API |
+| mlx | `--context-aware mlx` | MLX VLM (Qwen2.5-VL etc.) | Yes (screenshots) | Free |
+
+```
+OPTIONS:
+  --context-aware <backend>  Backend: local, claude, or mlx
+  --debug                    Print screen context and correction status to stdout
+  --claude-model <model>     Model for claude backend (default: haiku)
+  --mlx-model <model-id>     MLX model ID from Hugging Face
+  --ignore-titles <keywords> Comma-separated keywords for media site detection
+  --txt/--srt/--vtt/--json/--ndjson
+                             Output format (default: --txt)
+```
+
+> Screen Recording and Accessibility permissions are required. Grant them in System Settings > Privacy & Security.
+
+#### Features
+
+- Multi-display support (screenshots + window info per display)
+- Browser URL extraction (Firefox, Safari, Chrome, Arc, etc.)
+- Media playback detection: mutes mic when video/music is playing (NowPlaying API)
+- NDJSON output for streaming to other tools
+
+#### Examples
+
+```bash
+# On-device correction with FoundationModels
+yap dictate --context-aware local
+
+# Correction with Claude (default: haiku)
+yap dictate --context-aware claude
+
+# Correction with Claude Sonnet
+yap dictate --context-aware claude --claude-model sonnet
+
+# On-device correction with MLX VLM
+yap dictate --context-aware mlx
+
+# Use a different MLX model
+yap dictate --context-aware mlx --mlx-model mlx-community/Qwen3-VL-4B-Instruct-4bit
+
+# Debug mode (shows screen context, correction status, timing)
+yap dictate --context-aware mlx --debug
+
+# NDJSON output for piping
+yap dictate --context-aware claude --ndjson
+```
+
+#### MLX Model Cache
+
+MLX models are downloaded from Hugging Face on first use and cached at:
+
+```
+~/Library/Caches/models/mlx-community/
+```
+
+To remove cached models:
+
+```bash
+rm -rf ~/Library/Caches/models/mlx-community/<model-name>
+```
+
+#### Building with MLX
+
+`swift build` requires Metal shaders to be compiled separately:
+
+```bash
+# 1. Install Metal Toolchain (if needed)
+xcodebuild -downloadComponent MetalToolchain
+
+# 2. Build
+swift build --disable-sandbox -c release
+
+# 3. Compile Metal shaders
+METAL_DIR=".build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+INCLUDE_DIR=".build/checkouts/mlx-swift/Source/Cmlx/mlx-generated"
+for f in $(find "$METAL_DIR" -name "*.metal"); do
+    xcrun metal -c "$f" -I "$INCLUDE_DIR" -o "/tmp/mlx_$(basename "$f" .metal).air"
+done
+xcrun metallib /tmp/mlx_*.air -o .build/release/mlx.metallib
+```
+
 ### MCP Server
 
 yap includes an [MCP](https://modelcontextprotocol.io) server that exposes a `transcribe` tool, allowing any MCP-compatible agent to transcribe audio and video files.
