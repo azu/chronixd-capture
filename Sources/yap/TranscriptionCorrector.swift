@@ -10,19 +10,17 @@ struct LLMCorrectionOutput {
 actor TranscriptionCorrector: Corrector {
     /// Timeout for correction in seconds. If exceeded, original text is returned.
     static let timeoutSeconds: UInt64 = 5
+    /// Max OCR chars per display for the ~3B on-device model.
+    static let maxOCRCharsPerDisplay = 500
 
-    private let session: LanguageModelSession
+    private static let instructions = """
+        You are a transcription corrector. Given a speech transcription segment and the screen context \
+        (application name, window title, visible text), correct any misrecognized words.
+        Focus on: technical terms, proper nouns, and words that should match the on-screen context.
+        Preserve the original meaning. Only fix recognition errors, do not rephrase.
+        """
 
-    init() {
-        self.session = LanguageModelSession(
-            instructions: """
-            You are a transcription corrector. Given a speech transcription segment and the screen context \
-            (application name, window title, visible text), correct any misrecognized words.
-            Focus on: technical terms, proper nouns, and words that should match the on-screen context.
-            Preserve the original meaning. Only fix recognition errors, do not rephrase.
-            """
-        )
-    }
+    init() {}
 
     func correct(text: String, context: ScreenContext) async -> CorrectionResult {
         do {
@@ -39,6 +37,9 @@ actor TranscriptionCorrector: Corrector {
     }
 
     private func performCorrection(text: String, context: ScreenContext) async throws -> String {
+        // Create a fresh session per correction to avoid context window overflow
+        let session = LanguageModelSession(instructions: Self.instructions)
+
         var prompt = "Transcription: \(text)\n\nScreen context:\n"
         for display in context.displays {
             prompt += display.isFocused ? "### Focused Display\n" : "### Display\n"
@@ -51,11 +52,10 @@ actor TranscriptionCorrector: Corrector {
             if let url = display.url {
                 prompt += "URL: \(url)\n"
             }
-            if display.isPlayingMedia {
-                prompt += "⚠️ This display is playing media/video. Audio from the video may be mixed in. Focus on correcting the user's own speech, not video dialogue.\n"
-            }
             if !display.ocrText.isEmpty {
-                prompt += "Screen text:\n\(display.ocrText)\n"
+                // Limit OCR for the small on-device model
+                let truncated = String(display.ocrText.prefix(Self.maxOCRCharsPerDisplay))
+                prompt += "Screen text:\n\(truncated)\n"
             }
             prompt += "\n"
         }
