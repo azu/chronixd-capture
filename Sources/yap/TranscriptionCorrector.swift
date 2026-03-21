@@ -2,12 +2,12 @@
 import FoundationModels
 
 @Generable
-struct CorrectionResult {
+struct LLMCorrectionOutput {
     @Guide(description: "Corrected transcription text based on screen context. If no correction is needed, return the original text unchanged.")
     let corrected: String
 }
 
-actor TranscriptionCorrector {
+actor TranscriptionCorrector: Corrector {
     /// Timeout for correction in seconds. If exceeded, original text is returned.
     static let timeoutSeconds: UInt64 = 5
 
@@ -24,16 +24,17 @@ actor TranscriptionCorrector {
         )
     }
 
-    /// Correct a transcription segment using screen context.
-    /// Returns (original, corrected) tuple. On timeout or error, corrected == original.
-    func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String) {
+    func correct(text: String, context: ScreenContext) async -> CorrectionResult {
         do {
             let corrected = try await withTimeout(seconds: Self.timeoutSeconds) {
                 try await self.performCorrection(text: text, context: context)
             }
-            return (original: text, corrected: corrected)
+            let status: CorrectionStatus = corrected == text ? .unchanged : .corrected
+            return CorrectionResult(original: text, corrected: corrected, status: status)
+        } catch is CancellationError {
+            return CorrectionResult(original: text, corrected: text, status: .timeout)
         } catch {
-            return (original: text, corrected: text)
+            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
         }
     }
 
@@ -61,7 +62,7 @@ actor TranscriptionCorrector {
 
         let result = try await session.respond(
             to: prompt,
-            generating: CorrectionResult.self
+            generating: LLMCorrectionOutput.self
         )
         return result.content.corrected
     }

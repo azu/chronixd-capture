@@ -17,12 +17,22 @@ enum CorrectorBackend: String, ExpressibleByArgument, Sendable {
 
 // MARK: - Corrector Protocol
 
-protocol Corrector: Sendable {
-    func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String)
+enum CorrectionStatus: Sendable {
+    case corrected
+    case unchanged
+    case timeout
+    case error(String)
 }
 
-extension TranscriptionCorrector: Corrector {}
-extension ClaudeCorrector: Corrector {}
+struct CorrectionResult: Sendable {
+    let original: String
+    let corrected: String
+    let status: CorrectionStatus
+}
+
+protocol Corrector: Sendable {
+    func correct(text: String, context: ScreenContext) async -> CorrectionResult
+}
 
 // MARK: - Dictate
 
@@ -287,8 +297,16 @@ struct Dictate: AsyncParsableCommand {
                             print("[context-aware] Correction took \(elapsed)")
                             fflush(stdout)
                         }
-                        if showDebug && correction.original == correction.corrected {
-                            print("[context-aware] No correction applied")
+                        if showDebug {
+                            switch correction.status {
+                            case .corrected: break
+                            case .unchanged:
+                                print("[context-aware] No correction needed")
+                            case .timeout:
+                                print("[context-aware] Correction timed out")
+                            case .error(let msg):
+                                print("[context-aware] Correction error: \(msg)")
+                            }
                             fflush(stdout)
                         }
                         print(correction.corrected)

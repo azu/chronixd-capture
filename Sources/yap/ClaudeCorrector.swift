@@ -1,7 +1,7 @@
 import Foundation
 
 /// Corrects transcription using `claude -p` CLI with multimodal input (screenshots).
-final class ClaudeCorrector: Sendable {
+final class ClaudeCorrector: Corrector, Sendable {
     /// Timeout in seconds for each claude invocation.
     static let timeoutSeconds: UInt64 = 30
 
@@ -11,18 +11,21 @@ final class ClaudeCorrector: Sendable {
         self.model = model
     }
 
-    func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String) {
+    func correct(text: String, context: ScreenContext) async -> CorrectionResult {
         do {
             let corrected = try await withTimeout(seconds: Self.timeoutSeconds) {
                 try await self.runClaude(text: text, context: context)
             }
             let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
-                return (original: text, corrected: text)
+                return CorrectionResult(original: text, corrected: text, status: .error("empty response"))
             }
-            return (original: text, corrected: trimmed)
+            let status: CorrectionStatus = trimmed == text ? .unchanged : .corrected
+            return CorrectionResult(original: text, corrected: trimmed, status: status)
+        } catch is CancellationError {
+            return CorrectionResult(original: text, corrected: text, status: .timeout)
         } catch {
-            return (original: text, corrected: text)
+            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
         }
     }
 
