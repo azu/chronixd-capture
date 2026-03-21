@@ -2,53 +2,43 @@ import Foundation
 
 /// Checks if media is currently playing using the system NowPlaying info (MediaRemote).
 enum AudioOutputDetector {
-    private static let getInfoFunc: (
-        @convention(c) (DispatchQueue, @escaping ([String: Any]) -> Void) -> Void
-    )? = {
-        guard let bundle = CFBundleCreate(
-            kCFAllocatorDefault,
-            NSURL(fileURLWithPath: "/System/Library/PrivateFrameworks/MediaRemote.framework")
-        ) else { return nil }
-        guard let ptr = CFBundleGetFunctionPointerForName(
-            bundle, "MRMediaRemoteGetNowPlayingInfo" as CFString
-        ) else { return nil }
-        return unsafeBitCast(ptr, to: (
-            @convention(c) (DispatchQueue, @escaping ([String: Any]) -> Void) -> Void
-        ).self)
-    }()
-
-    /// Thread-safe one-shot continuation wrapper.
-    private final class OneShotContinuation: @unchecked Sendable {
-        private var continuation: CheckedContinuation<Bool, Never>?
-        private let lock = NSLock()
-
-        init(_ continuation: CheckedContinuation<Bool, Never>) {
-            self.continuation = continuation
-        }
-
-        func resume(returning value: Bool) {
-            lock.lock()
-            let cont = continuation
-            continuation = nil
-            lock.unlock()
-            cont?.resume(returning: value)
-        }
-    }
-
     /// Returns true if media is actively playing (playbackRate > 0).
-    /// Must be called from a non-MainActor context (e.g. Task.detached).
+    /// Spawns a short-lived process to query MediaRemote, avoiding RunLoop issues.
     static func isMediaPlaying() async -> Bool {
-        guard let getInfo = getInfoFunc else { return false }
+        let script = """
+        import Foundation
+        typealias F = @convention(c) (DispatchQueue, @escaping ([String: Any]) -> Void) -> Void
+        let b = CFBundleCreate(kCFAllocatorDefault, NSURL(fileURLWithPath: "/System/Library/PrivateFrameworks/MediaRemote.framework"))!
+        let p = CFBundleGetFunctionPointerForName(b, "MRMediaRemoteGetNowPlayingInfo" as CFString)!
+        let f = unsafeBitCast(p, to: F.self)
+        f(DispatchQueue.main) { info in
+            let rate = info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
+            print(rate > 0 ? "1" : "0")
+            exit(0)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { print("0"); exit(0) }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 3))
+        print("0"); exit(0)
+        """
 
-        return await withCheckedContinuation { rawContinuation in
-            let cont = OneShotContinuation(rawContinuation)
-            // MediaRemote requires main queue for callbacks
-            getInfo(DispatchQueue.main) { info in
-                let rate = info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
-                cont.resume(returning: rate > 0)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                cont.resume(returning: false)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+        process.arguments = ["-e", script]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+
+        return await withCheckedContinuation { continuation in
+            process.terminationHandler = { _ in
+                let data = stdout.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
+                continuation.resume(returning: output == "1")
             }
         }
     }
