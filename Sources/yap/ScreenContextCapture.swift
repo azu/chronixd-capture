@@ -109,18 +109,27 @@ private func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, wi
         }
         guard matched else { continue }
 
-        // One window per display (windows are ordered front-to-back)
-        guard !seenDisplays.contains(displayID) else { continue }
+        let windowTitle = window[kCGWindowName as String] as? String
+
+        // Skip windows with empty titles if we haven't seen this display yet —
+        // a titled window from the same app may follow (e.g. Firefox toolbar vs content)
+        let hasTitle = windowTitle != nil && !windowTitle!.isEmpty
+        if seenDisplays.contains(displayID) {
+            // Already have an entry. Only replace if the new one has a title and the old one doesn't.
+            if hasTitle, let existing = results[displayID], (existing.windowTitle ?? "").isEmpty {
+                results[displayID] = (appName: appName, windowTitle: windowTitle)
+            }
+            continue
+        }
         seenDisplays.insert(displayID)
 
-        var windowTitle = window[kCGWindowName as String] as? String
-
-        // Fallback: use Accessibility API for apps that don't expose kCGWindowName (e.g. Firefox)
-        if windowTitle == nil, let pid = window[kCGWindowOwnerPID as String] as? Int32 {
-            windowTitle = axWindowTitle(for: pid)
+        // Use AX fallback if title is nil or empty
+        var resolvedTitle = windowTitle
+        if !hasTitle {
+            resolvedTitle = axWindowTitle(for: pid)
         }
 
-        results[displayID] = (appName: appName, windowTitle: windowTitle)
+        results[displayID] = (appName: appName, windowTitle: resolvedTitle)
     }
 
     return results
