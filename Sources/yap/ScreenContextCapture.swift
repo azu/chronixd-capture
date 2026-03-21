@@ -25,6 +25,12 @@ let defaultMediaTitleKeywords = [
     "Crunchyroll", "Spotify", "Apple Music", "Apple TV",
 ]
 
+/// App names that are always considered media players (regardless of window title).
+let defaultMediaAppNames = [
+    "Music", "ミュージック", "Spotify", "VLC", "IINA",
+    "QuickTime Player", "TV", "Podcasts", "ポッドキャスト",
+]
+
 struct ScreenContext: Sendable {
     let displays: [DisplayContext]
     let timestamp: Date
@@ -226,11 +232,17 @@ private func captureAllDisplays(
         // Match window info for this display
         let windowInfo = windowsByDisplay[display.displayID]
 
-        let isMedia: Bool = if let title = windowInfo?.windowTitle {
+        let titleMatch: Bool = if let title = windowInfo?.windowTitle {
             mediaTitleKeywords.contains { title.localizedCaseInsensitiveContains($0) }
         } else {
             false
         }
+        let appMatch: Bool = if let appName = windowInfo?.appName {
+            defaultMediaAppNames.contains { appName.localizedCaseInsensitiveCompare($0) == .orderedSame }
+        } else {
+            false
+        }
+        let isMedia = titleMatch || appMatch
 
         results.append(DisplayContext(
             displayID: display.displayID,

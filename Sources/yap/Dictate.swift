@@ -224,26 +224,13 @@ struct Dictate: AsyncParsableCommand {
             )
 
             // Background task: poll media playback state every 2 seconds
-            // Mutes mic when media site is visible AND playing
+            // Mutes mic when any media is actively playing (NowPlaying playbackRate > 0)
             nonisolated(unsafe) let muteCaptureRef = capture
-            let mediaKeywords = screenCapture.mediaTitleKeywords
             let mediaCheckDebug = showDebug
             let mediaCheckTask = Task.detached {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    let isPlaying = await AudioOutputDetector.isMediaPlaying()
-                    let hasMediaSite: Bool
-                    if isPlaying {
-                        // Lightweight check: just query window titles, no screenshots/OCR
-                        let windows = captureVisibleWindows()
-                        hasMediaSite = windows.values.contains { entry in
-                            guard let title = entry.windowTitle else { return false }
-                            return mediaKeywords.contains { title.localizedCaseInsensitiveContains($0) }
-                        }
-                    } else {
-                        hasMediaSite = false
-                    }
-                    let shouldMute = isPlaying && hasMediaSite
+                    let shouldMute = await AudioOutputDetector.isMediaPlaying()
                     if muteCaptureRef.isMuted != shouldMute {
                         muteCaptureRef.isMuted = shouldMute
                         if mediaCheckDebug {
