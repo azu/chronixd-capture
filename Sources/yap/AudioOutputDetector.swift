@@ -19,18 +19,18 @@ enum AudioOutputDetector {
 
     /// Returns true if media is actively playing (playbackRate > 0).
     /// Returns false if paused, stopped, or if NowPlaying info is unavailable.
+    @MainActor
     static func isMediaPlaying() async -> Bool {
         guard let getInfo = getInfoFunc else { return false }
 
         return await withCheckedContinuation { continuation in
-            var resumed = false
+            nonisolated(unsafe) var resumed = false
             getInfo(DispatchQueue.main) { info in
                 guard !resumed else { return }
                 resumed = true
                 let rate = info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
                 continuation.resume(returning: rate > 0)
             }
-            // Timeout: assume not playing if no response in 1 second
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard !resumed else { return }
                 resumed = true
