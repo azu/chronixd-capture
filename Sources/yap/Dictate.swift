@@ -223,6 +223,40 @@ struct Dictate: AsyncParsableCommand {
                 displays: [], timestamp: Date()
             )
 
+            // Background task: poll media playback state every 2 seconds
+            // Mutes mic when media site is visible AND playing
+            nonisolated(unsafe) let muteCaptureRef = capture
+            let mediaKeywords = screenCapture.mediaTitleKeywords
+            let mediaCheckDebug = showDebug
+            let mediaCheckTask = Task.detached {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    let isPlaying = await AudioOutputDetector.isMediaPlaying()
+                    let hasMediaSite: Bool
+                    if isPlaying {
+                        // Lightweight check: just query window titles, no screenshots/OCR
+                        let windows = captureVisibleWindows()
+                        hasMediaSite = windows.values.contains { entry in
+                            guard let title = entry.windowTitle else { return false }
+                            return mediaKeywords.contains { title.localizedCaseInsensitiveContains($0) }
+                        }
+                    } else {
+                        hasMediaSite = false
+                    }
+                    let shouldMute = isPlaying && hasMediaSite
+                    if muteCaptureRef.isMuted != shouldMute {
+                        muteCaptureRef.isMuted = shouldMute
+                        if mediaCheckDebug {
+                            let msg = shouldMute
+                                ? "[context-aware] Media playing, muting mic"
+                                : "[context-aware] Media stopped, unmuting mic"
+                            print(msg)
+                            fflush(stdout)
+                        }
+                    }
+                }
+            }
+
             if format == .txt {
                 var lastResultTime = Date.distantPast
                 for try await result in transcriber.results {
@@ -274,6 +308,7 @@ struct Dictate: AsyncParsableCommand {
                         fflush(stdout)
                     }
                 }
+                mediaCheckTask.cancel()
             } else {
                 if let header = format.header(locale: locale) {
                     print(header)
@@ -348,6 +383,7 @@ struct Dictate: AsyncParsableCommand {
                     print(footer)
                 }
             }
+            mediaCheckTask.cancel()
         } else if format == .txt {
             for try await result in transcriber.results {
                 let text = String(result.text.characters)
@@ -456,6 +492,9 @@ final class MicrophoneCapture: @unchecked Sendable {
     let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
     let targetFormat: AVAudioFormat
 
+    /// When true, audio buffers are discarded (not sent to speech recognizer).
+    nonisolated(unsafe) var isMuted: Bool = false
+
     func stop() {
         audioEngine.stop()
         inputContinuation.finish()
@@ -472,6 +511,7 @@ final class MicrophoneCapture: @unchecked Sendable {
     // MARK: Private
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard !isMuted else { return }
         let frameCapacity = AVAudioFrameCount(
             ceil(Double(buffer.frameLength) * targetFormat.sampleRate / converter.inputFormat.sampleRate)
         )

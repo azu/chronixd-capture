@@ -70,7 +70,7 @@ final class ScreenContextCapture: Sendable {
 
 /// Get the top-most user window per display using CGWindowListCopyWindowInfo.
 /// Returns a dictionary keyed by display ID.
-private func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, windowTitle: String?)] {
+func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, windowTitle: String?)] {
     guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
         return [:]
     }
