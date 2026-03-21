@@ -203,7 +203,15 @@ private func axBrowserURL(for pid: Int32) -> String? {
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
         let role = roleRef as? String ?? ""
 
-        if role == "AXComboBox" || role == "AXTextField" {
+        if role == "AXComboBox" || role == "AXTextField" || role == "AXStaticText" {
+            // For AXStaticText (Arc), check identifier to prefer the URL bar
+            if role == "AXStaticText" {
+                var identRef: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, "AXIdentifier" as CFString, &identRef)
+                let ident = identRef as? String ?? ""
+                // Arc's URL bar has identifier "commandBarPlaceholderTextField"
+                guard ident.contains("commandBar") || ident.isEmpty else { return nil }
+            }
             var valueRef: CFTypeRef?
             AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef)
             if let value = valueRef as? String, looksLikeURL(value) {
