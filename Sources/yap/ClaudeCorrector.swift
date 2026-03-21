@@ -1,35 +1,62 @@
 import Foundation
 
 /// Corrects transcription using `claude -p` CLI with multimodal input (screenshots).
-final class ClaudeCorrector: Corrector, Sendable {
+final class ClaudeCorrector: Corrector, @unchecked Sendable {
     /// Timeout in seconds for each claude invocation.
     static let timeoutSeconds: UInt64 = 30
+    /// How far back to include previous segments as context.
+    static let contextWindowSeconds: TimeInterval = 600 // 10 minutes
 
     let model: String
+    private var history: [(text: String, timestamp: Date)] = []
+    private let lock = NSLock()
 
     init(model: String = "haiku") {
         self.model = model
     }
 
+    private func addToHistory(_ text: String) {
+        let now = Date()
+        lock.lock()
+        history.append((text: text, timestamp: now))
+        // Remove entries older than context window
+        let cutoff = now.addingTimeInterval(-Self.contextWindowSeconds)
+        history.removeAll { $0.timestamp < cutoff }
+        lock.unlock()
+    }
+
+    private func getRecentHistory() -> [String] {
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-Self.contextWindowSeconds)
+        lock.lock()
+        defer { lock.unlock() }
+        return history.filter { $0.timestamp >= cutoff }.map(\.text)
+    }
+
     func correct(text: String, context: ScreenContext) async -> CorrectionResult {
+        let recentHistory = getRecentHistory()
         do {
             let corrected = try await withTimeout(seconds: Self.timeoutSeconds) {
-                try await self.runClaude(text: text, context: context)
+                try await self.runClaude(text: text, context: context, previousSegments: recentHistory)
             }
             let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
+                addToHistory(text)
                 return CorrectionResult(original: text, corrected: text, status: .error("empty response"))
             }
             let status: CorrectionStatus = trimmed == text ? .unchanged : .corrected
+            addToHistory(trimmed)
             return CorrectionResult(original: text, corrected: trimmed, status: status)
         } catch is CancellationError {
+            addToHistory(text)
             return CorrectionResult(original: text, corrected: text, status: .timeout)
         } catch {
+            addToHistory(text)
             return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
         }
     }
 
-    private func runClaude(text: String, context: ScreenContext) async throws -> String {
+    private func runClaude(text: String, context: ScreenContext, previousSegments: [String]) async throws -> String {
         var prompt = """
             You are a transcription corrector.
 
@@ -40,7 +67,16 @@ final class ClaudeCorrector: Corrector, Sendable {
             - Preserve the original meaning and style. Do not rephrase.
             - Output ONLY the corrected (or unchanged) text. No explanations, no quotes, no prefixes.
 
-            ## Transcription
+            """
+        if !previousSegments.isEmpty {
+            prompt += "## Previous conversation (for context)\n"
+            for segment in previousSegments {
+                prompt += "- \(segment)\n"
+            }
+            prompt += "\n"
+        }
+        prompt += """
+            ## Transcription to correct
             \(text)
 
             ## Screen Context
