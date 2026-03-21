@@ -48,24 +48,20 @@ actor TranscriptionCorrector: Corrector {
         // Create a fresh session per correction to avoid context window overflow
         let session = LanguageModelSession(instructions: Self.instructions)
 
+        // Only pass app name, window title, URL — no OCR text for the small model
+        // OCR confuses the ~3B model and gets mixed into the output
         var prompt = "Transcription: \(text)\n\nScreen context:\n"
         for display in context.displays {
-            prompt += display.isFocused ? "### Focused Display\n" : "### Display\n"
             if let appName = display.appName {
-                prompt += "Application: \(appName)\n"
-            }
-            if let windowTitle = display.windowTitle {
-                prompt += "Window: \(windowTitle)\n"
+                prompt += "App: \(appName)"
+                if let windowTitle = display.windowTitle {
+                    prompt += " - \(windowTitle)"
+                }
+                prompt += "\n"
             }
             if let url = display.url {
                 prompt += "URL: \(url)\n"
             }
-            if !display.ocrText.isEmpty {
-                // Limit OCR for the small on-device model
-                let truncated = String(display.ocrText.prefix(Self.maxOCRCharsPerDisplay))
-                prompt += "Screen text:\n\(truncated)\n"
-            }
-            prompt += "\n"
         }
 
         let result = try await session.respond(
