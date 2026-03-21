@@ -313,10 +313,12 @@ struct Dictate: AsyncParsableCommand {
                             fflush(stdout)
                         }
                         if showDebug {
+                            let images = screenContext.displays.filter { $0.screenshotPath != nil }.count
                             switch correction.status {
-                            case .corrected: break
+                            case .corrected:
+                                print("[context-aware] Corrected (images: \(images))")
                             case .unchanged:
-                                print("[context-aware] No correction needed")
+                                print("[context-aware] No correction needed (images: \(images))")
                             case .timeout:
                                 print("[context-aware] Correction timed out")
                             case .error(let msg):

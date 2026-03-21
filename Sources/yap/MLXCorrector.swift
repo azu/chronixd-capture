@@ -52,10 +52,6 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
                 response = try await session.respond(to: prompt, images: images, videos: [])
             }
 
-            // Debug: print response to stderr for inspection
-            if ProcessInfo.processInfo.environment["YAP_MLX_DEBUG"] != nil {
-                FileHandle.standardError.write(Data("[mlx] prompt length: \(prompt.count), images: \(images.count), response: \(response)\n".utf8))
-            }
 
             let corrected = response.trimmingCharacters(in: .whitespacesAndNewlines)
             let status: CorrectionStatus = corrected == text ? .unchanged : .corrected
