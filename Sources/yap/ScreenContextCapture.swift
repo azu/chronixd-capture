@@ -74,12 +74,40 @@ private func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, wi
 
         guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
               let x = bounds["X"] as? CGFloat,
-              let y = bounds["Y"] as? CGFloat else { continue }
-        let point = CGPoint(x: x + 1, y: y + 1)
-        var displayCount: UInt32 = 0
+              let y = bounds["Y"] as? CGFloat,
+              let w = bounds["Width"] as? CGFloat,
+              let h = bounds["Height"] as? CGFloat else { continue }
+
+        // Try center point first, then corners — fullscreen windows can have off-screen coordinates
+        let candidatePoints = [
+            CGPoint(x: x + w / 2, y: y + h / 2),
+            CGPoint(x: x + 1, y: y + 1),
+        ]
         var displayID: CGDirectDisplayID = 0
-        CGGetDisplaysWithPoint(point, 1, &displayID, &displayCount)
-        guard displayCount > 0 else { continue }
+        var matched = false
+        for point in candidatePoints {
+            var count: UInt32 = 0
+            CGGetDisplaysWithPoint(point, 1, &displayID, &count)
+            if count > 0 { matched = true; break }
+        }
+
+        // Fullscreen windows may have coordinates outside all displays.
+        // Fall back to matching by window size ≈ display size.
+        if !matched {
+            let windowRect = CGRect(x: x, y: y, width: w, height: h)
+            var allDisplays = [CGDirectDisplayID](repeating: 0, count: 8)
+            var displayCount: UInt32 = 0
+            CGGetActiveDisplayList(8, &allDisplays, &displayCount)
+            for i in 0..<Int(displayCount) {
+                let displayBounds = CGDisplayBounds(allDisplays[i])
+                if abs(windowRect.width - displayBounds.width) < 10 && abs(windowRect.height - displayBounds.height) < 10 {
+                    displayID = allDisplays[i]
+                    matched = true
+                    break
+                }
+            }
+        }
+        guard matched else { continue }
 
         // One window per display (windows are ordered front-to-back)
         guard !seenDisplays.contains(displayID) else { continue }
