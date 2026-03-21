@@ -271,6 +271,10 @@ struct Dictate: AsyncParsableCommand {
                     for chunk in result.text.splitAtTimeGaps(threshold: 1.5) {
                         let text = String(chunk.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !text.isEmpty else { continue }
+                        if showDebug {
+                            print("[context-aware] Raw: \(text)")
+                            fflush(stdout)
+                        }
                         let correctionStart = ContinuousClock.now
                         let correction = await corrector.correct(text: text, context: screenContext)
                         if showDebug {
@@ -333,6 +337,10 @@ struct Dictate: AsyncParsableCommand {
                             let words = allWords?.filter {
                                 $0.timeRange.start.seconds >= timeRange.start.seconds
                                     && $0.timeRange.end.seconds <= timeRange.end.seconds
+                            }
+                            if showDebug {
+                                print("[context-aware] Raw: \(text)")
+                                fflush(stdout)
                             }
                             let correctionStart = ContinuousClock.now
                             let correction = await corrector.correct(text: text, context: currentContext)
