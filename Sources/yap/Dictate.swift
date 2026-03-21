@@ -280,15 +280,6 @@ struct Dictate: AsyncParsableCommand {
                     }
                     lastResultTime = now
 
-                    // Skip output when media site is visible AND media is actively playing
-                    let hasMediaSite = screenContext.displays.contains { $0.isPlayingMedia }
-                    if hasMediaSite, await AudioOutputDetector.isMediaPlaying() {
-                        if showDebug {
-                            print("[context-aware] Media playing, skipping output")
-                            fflush(stdout)
-                        }
-                        continue
-                    }
 
                     for chunk in result.text.splitAtTimeGaps(threshold: 1.5) {
                         let text = String(chunk.characters).trimmingCharacters(in: .whitespacesAndNewlines)

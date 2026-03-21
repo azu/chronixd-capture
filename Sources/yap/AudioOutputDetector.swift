@@ -17,24 +17,38 @@ enum AudioOutputDetector {
         ).self)
     }()
 
+    /// Thread-safe one-shot continuation wrapper.
+    private final class OneShotContinuation: @unchecked Sendable {
+        private var continuation: CheckedContinuation<Bool, Never>?
+        private let lock = NSLock()
+
+        init(_ continuation: CheckedContinuation<Bool, Never>) {
+            self.continuation = continuation
+        }
+
+        func resume(returning value: Bool) {
+            lock.lock()
+            let cont = continuation
+            continuation = nil
+            lock.unlock()
+            cont?.resume(returning: value)
+        }
+    }
+
     /// Returns true if media is actively playing (playbackRate > 0).
-    /// Returns false if paused, stopped, or if NowPlaying info is unavailable.
+    /// Must be called from a non-MainActor context (e.g. Task.detached).
     static func isMediaPlaying() async -> Bool {
         guard let getInfo = getInfoFunc else { return false }
 
-        return await withCheckedContinuation { continuation in
-            nonisolated(unsafe) var resumed = false
-            // Use global queue to avoid deadlock with @MainActor callers
-            getInfo(DispatchQueue.global()) { info in
-                guard !resumed else { return }
-                resumed = true
+        return await withCheckedContinuation { rawContinuation in
+            let cont = OneShotContinuation(rawContinuation)
+            // MediaRemote requires main queue for callbacks
+            getInfo(DispatchQueue.main) { info in
                 let rate = info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
-                continuation.resume(returning: rate > 0)
+                cont.resume(returning: rate > 0)
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(returning: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                cont.resume(returning: false)
             }
         }
     }
