@@ -19,6 +19,11 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
         self.modelID = modelID ?? Self.defaultModelID
     }
 
+    /// Load the model eagerly. Call at startup to avoid delays on first correction.
+    func loadModelIfNeeded() async throws {
+        _ = try await ensureModel()
+    }
+
     private func ensureModel() async throws -> ChatSession {
         if let session { return session }
         let loaded = try await loadModel(id: modelID)

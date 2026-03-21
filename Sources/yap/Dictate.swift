@@ -241,6 +241,14 @@ struct Dictate: AsyncParsableCommand {
             }
             let useScreenshots = backend == .claude || backend == .mlx
 
+            // Pre-load MLX model at startup
+            if let mlxCorrector = corrector as? MLXCorrector {
+                if isatty(STDERR_FILENO) != 0 {
+                    FileHandle.standardError.write(Data("Loading MLX model…\n".utf8))
+                }
+                try await mlxCorrector.loadModelIfNeeded()
+            }
+
             let emptyContext = ScreenContext(
                 displays: [], timestamp: Date()
             )
