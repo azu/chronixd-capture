@@ -77,27 +77,20 @@ private func captureAccessibilityInfo() -> AccessibilityInfo {
 
 // MARK: - OCR Screen Capture
 
-/// Capture OCR text from all connected displays in parallel, concatenated with display separators.
+/// Capture OCR text from all connected displays, concatenated.
 private func captureAllDisplaysOCRText() async throws -> String {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     guard !content.displays.isEmpty else { return "" }
 
-    let texts = try await withThrowingTaskGroup(of: String.self, returning: [String].self) { group in
-        for display in content.displays {
-            group.addTask {
-                try await captureOCRTextForDisplay(display)
-            }
+    var results: [String] = []
+    for display in content.displays {
+        let text = try await captureOCRTextForDisplay(display)
+        if !text.isEmpty {
+            results.append(text)
         }
-        var results: [String] = []
-        for try await text in group {
-            if !text.isEmpty {
-                results.append(text)
-            }
-        }
-        return results
     }
 
-    let combined = texts.joined(separator: "\n")
+    let combined = results.joined(separator: "\n")
     return String(combined.prefix(ScreenContextCapture.maxOCRLength))
 }
 
