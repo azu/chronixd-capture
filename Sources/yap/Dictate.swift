@@ -13,6 +13,7 @@ private nonisolated(unsafe) var dictateSignalWriteFD: Int32 = -1
 enum CorrectorBackend: String, ExpressibleByArgument, Sendable {
     case local
     case claude
+    case mlx
 }
 
 // MARK: - Corrector Protocol
@@ -66,7 +67,7 @@ struct Dictate: AsyncParsableCommand {
 
     @Option(
         name: .long,
-        help: "Use screen context to improve transcription accuracy. Values: local (on-device LLM), claude (claude CLI)."
+        help: "Use screen context to improve transcription accuracy. Values: local (on-device LLM), claude (claude CLI), mlx (MLX VLM)."
     ) var contextAware: CorrectorBackend? = nil
 
     @Flag(
@@ -78,6 +79,11 @@ struct Dictate: AsyncParsableCommand {
         name: .long,
         help: "Model to use for claude backend (e.g. haiku, sonnet, opus). Default: haiku."
     ) var claudeModel: String = "haiku"
+
+    @Option(
+        name: .long,
+        help: "MLX model ID from Hugging Face (e.g. mlx-community/Qwen2.5-VL-3B-Instruct-4bit)."
+    ) var mlxModel: String?
 
     @Option(
         name: .long,
@@ -231,8 +237,9 @@ struct Dictate: AsyncParsableCommand {
             let corrector: any Corrector = switch backend {
             case .local: TranscriptionCorrector()
             case .claude: ClaudeCorrector(model: claudeModel)
+            case .mlx: MLXCorrector(modelID: mlxModel)
             }
-            let useClaude = backend == .claude
+            let useScreenshots = backend == .claude || backend == .mlx
 
             let emptyContext = ScreenContext(
                 displays: [], timestamp: Date()
@@ -266,7 +273,7 @@ struct Dictate: AsyncParsableCommand {
                     let screenContext: ScreenContext
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
                         let captureStart = ContinuousClock.now
-                        if useClaude {
+                        if useScreenshots {
                             screenContext = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
                         } else {
                             screenContext = (try? await screenCapture.capture()) ?? emptyContext
@@ -327,7 +334,7 @@ struct Dictate: AsyncParsableCommand {
                     let now = Date()
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
                         let captureStart = ContinuousClock.now
-                        if useClaude {
+                        if useScreenshots {
                             currentContext = (try? await screenCapture.captureWithScreenshots()) ?? currentContext
                         } else {
                             currentContext = (try? await screenCapture.capture()) ?? currentContext
