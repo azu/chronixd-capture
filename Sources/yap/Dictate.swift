@@ -323,11 +323,11 @@ private func logScreenContext(_ context: ScreenContext) {
         lines.append("  Window: \(windowTitle)")
     }
     if let focusedElement = context.focusedElement {
-        lines.append("  Focused: \(String(focusedElement.prefix(200)))")
+        lines.append("  Focused: \(focusedElement)")
     }
     if !context.ocrText.isEmpty {
-        let preview = context.ocrText.prefix(300).replacingOccurrences(of: "\n", with: "\\n")
-        lines.append("  OCR (\(context.ocrText.count) chars): \(preview)")
+        lines.append("  OCR (\(context.ocrText.count) chars):")
+        lines.append(context.ocrText)
     }
     let message = lines.joined(separator: "\n")
     print(message)
