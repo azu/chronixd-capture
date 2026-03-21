@@ -197,7 +197,7 @@ private func axBrowserURL(for pid: Int32) -> String? {
 
     // Search up to depth 5 for URL bar
     func findURL(_ element: AXUIElement, depth: Int = 0) -> String? {
-        guard depth < 5 else { return nil }
+        guard depth < 8 else { return nil }
 
         var roleRef: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
