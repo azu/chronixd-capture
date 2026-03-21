@@ -84,11 +84,37 @@ private func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, wi
         guard !seenDisplays.contains(displayID) else { continue }
         seenDisplays.insert(displayID)
 
-        let windowTitle = window[kCGWindowName as String] as? String
+        var windowTitle = window[kCGWindowName as String] as? String
+
+        // Fallback: use Accessibility API for apps that don't expose kCGWindowName (e.g. Firefox)
+        if windowTitle == nil, let pid = window[kCGWindowOwnerPID as String] as? Int32 {
+            windowTitle = axWindowTitle(for: pid)
+        }
+
         results[displayID] = (appName: appName, windowTitle: windowTitle)
     }
 
     return results
+}
+
+/// Get the window title via Accessibility API for apps that don't expose kCGWindowName.
+private func axWindowTitle(for pid: Int32) -> String? {
+    let axApp = AXUIElementCreateApplication(pid)
+    var windowsValue: CFTypeRef?
+    AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue)
+    guard let windows = windowsValue as? [AXUIElement], let firstWindow = windows.first else {
+        // Try focused window instead
+        var focusedWindow: CFTypeRef?
+        AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        guard let window = focusedWindow else { return nil }
+        var titleValue: CFTypeRef?
+        // swiftlint:disable:next force_cast
+        AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleValue)
+        return titleValue as? String
+    }
+    var titleValue: CFTypeRef?
+    AXUIElementCopyAttributeValue(firstWindow, kAXTitleAttribute as CFString, &titleValue)
+    return titleValue as? String
 }
 
 /// Get the focused UI element text from the frontmost app via Accessibility API.
