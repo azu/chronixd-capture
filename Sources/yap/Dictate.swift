@@ -220,12 +220,16 @@ struct Dictate: AsyncParsableCommand {
                     let now = Date()
                     let screenContext: ScreenContext
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
+                        let captureStart = ContinuousClock.now
                         if useClaude {
                             screenContext = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
                         } else {
                             screenContext = (try? await screenCapture.capture()) ?? emptyContext
                         }
                         if showDebug {
+                            let elapsed = ContinuousClock.now - captureStart
+                            print("[context-aware] Screen capture took \(elapsed)")
+                            fflush(stdout)
                             logScreenContext(screenContext)
                         }
                     } else {
@@ -236,7 +240,13 @@ struct Dictate: AsyncParsableCommand {
                     for chunk in result.text.splitAtTimeGaps(threshold: 1.5) {
                         let text = String(chunk.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !text.isEmpty else { continue }
+                        let correctionStart = ContinuousClock.now
                         let correction = await corrector.correct(text: text, context: screenContext)
+                        if showDebug {
+                            let elapsed = ContinuousClock.now - correctionStart
+                            print("[context-aware] Correction took \(elapsed)")
+                            fflush(stdout)
+                        }
                         if correction.original != correction.corrected {
                             print("\(correction.original) → \(correction.corrected)")
                         } else {
@@ -257,12 +267,16 @@ struct Dictate: AsyncParsableCommand {
                 for try await result in transcriber.results {
                     let now = Date()
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
+                        let captureStart = ContinuousClock.now
                         if useClaude {
                             currentContext = (try? await screenCapture.captureWithScreenshots()) ?? currentContext
                         } else {
                             currentContext = (try? await screenCapture.capture()) ?? currentContext
                         }
                         if showDebug {
+                            let elapsed = ContinuousClock.now - captureStart
+                            print("[context-aware] Screen capture took \(elapsed)")
+                            fflush(stdout)
                             logScreenContext(currentContext)
                         }
                     }
@@ -278,7 +292,13 @@ struct Dictate: AsyncParsableCommand {
                                 $0.timeRange.start.seconds >= timeRange.start.seconds
                                     && $0.timeRange.end.seconds <= timeRange.end.seconds
                             }
+                            let correctionStart = ContinuousClock.now
                             let correction = await corrector.correct(text: text, context: currentContext)
+                            if showDebug {
+                                let elapsed = ContinuousClock.now - correctionStart
+                                print("[context-aware] Correction took \(elapsed)")
+                                fflush(stdout)
+                            }
                             if segmentIndex > 0, let sep = format.segmentSeparator {
                                 print(sep, terminator: "")
                             }

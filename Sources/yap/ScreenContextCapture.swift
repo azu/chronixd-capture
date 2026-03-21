@@ -105,11 +105,21 @@ private func captureAllDisplays(ocr: Bool) async throws -> (String, [String]) {
     var ocrResults: [String] = []
     var paths: [String] = []
 
+    // Create timestamped directory: /tmp/yap/YYYYMMDD-HHmmss/
+    let yapDir = NSTemporaryDirectory() + "yap/"
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyyMMdd-HHmmss"
+    let dir = yapDir + formatter.string(from: Date()) + "/"
+    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+    // Keep only the most recent 60 capture directories
+    cleanupOldCaptures(in: yapDir, keep: 60)
+
     for display in content.displays {
         let image = try await captureDisplayImage(display)
 
-        // Save screenshot to temp file
-        let path = NSTemporaryDirectory() + "yap-screenshot-\(display.displayID).png"
+        // Save screenshot to timestamped directory
+        let path = dir + "display-\(display.displayID).png"
         if let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil) {
             CGImageDestinationAddImage(dest, image, nil)
             if CGImageDestinationFinalize(dest) {
@@ -142,6 +152,17 @@ private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {
         contentFilter: filter,
         configuration: config
     )
+}
+
+private func cleanupOldCaptures(in directory: String, keep: Int) {
+    let fm = FileManager.default
+    guard let entries = try? fm.contentsOfDirectory(atPath: directory) else { return }
+    let sorted = entries.sorted()
+    if sorted.count > keep {
+        for entry in sorted.prefix(sorted.count - keep) {
+            try? fm.removeItem(atPath: directory + entry)
+        }
+    }
 }
 
 private func performOCR(on image: CGImage) async throws -> String {
