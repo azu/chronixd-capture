@@ -3,11 +3,13 @@ import Foundation
 /// Corrects transcription using `claude -p` CLI with multimodal input (screenshots).
 final class ClaudeCorrector: Sendable {
     /// Timeout in seconds for each claude invocation.
-    static let timeoutSeconds: Double = 30
+    static let timeoutSeconds: UInt64 = 30
 
     func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String) {
         do {
-            let corrected = try await runClaude(text: text, context: context)
+            let corrected = try await withTimeout(seconds: Self.timeoutSeconds) {
+                try await self.runClaude(text: text, context: context)
+            }
             let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 return (original: text, corrected: text)
@@ -67,36 +69,33 @@ final class ClaudeCorrector: Sendable {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
+        try process.run()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
-
-            // Timeout: kill process if it takes too long
-            let timeoutWork = DispatchWorkItem { [weak process] in
-                guard let process, process.isRunning else { return }
-                process.terminate()
-            }
-            DispatchQueue.global().asyncAfter(
-                deadline: .now() + Self.timeoutSeconds,
-                execute: timeoutWork
-            )
-
+        return await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in
-                timeoutWork.cancel()
-                guard !resumed else { return }
-                resumed = true
                 let data = stdout.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
                 continuation.resume(returning: output)
             }
-            do {
-                try process.run()
-            } catch {
-                timeoutWork.cancel()
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(throwing: error)
-            }
+        }
+    }
+
+    private func withTimeout<T: Sendable>(
+        seconds: UInt64,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let task = Task { try await operation() }
+        let timeoutTask = Task {
+            try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            task.cancel()
+        }
+        do {
+            let result = try await task.value
+            timeoutTask.cancel()
+            return result
+        } catch {
+            timeoutTask.cancel()
+            throw error
         }
     }
 }
