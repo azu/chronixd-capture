@@ -22,7 +22,7 @@ final class ScreenContextCapture: Sendable {
     @MainActor
     func capture() async throws -> ScreenContext {
         let info = captureAccessibilityInfo()
-        let text = try await captureOCRText()
+        let text = try await captureAllDisplaysOCRText()
         return ScreenContext(
             appName: info.appName,
             windowTitle: info.windowTitle,
@@ -77,10 +77,31 @@ private func captureAccessibilityInfo() -> AccessibilityInfo {
 
 // MARK: - OCR Screen Capture
 
-private func captureOCRText() async throws -> String {
+/// Capture OCR text from all connected displays in parallel, concatenated with display separators.
+private func captureAllDisplaysOCRText() async throws -> String {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-    guard let display = content.displays.first else { return "" }
+    guard !content.displays.isEmpty else { return "" }
 
+    let texts = try await withThrowingTaskGroup(of: String.self, returning: [String].self) { group in
+        for display in content.displays {
+            group.addTask {
+                try await captureOCRTextForDisplay(display)
+            }
+        }
+        var results: [String] = []
+        for try await text in group {
+            if !text.isEmpty {
+                results.append(text)
+            }
+        }
+        return results
+    }
+
+    let combined = texts.joined(separator: "\n")
+    return String(combined.prefix(ScreenContextCapture.maxOCRLength))
+}
+
+private func captureOCRTextForDisplay(_ display: SCDisplay) async throws -> String {
     let filter = SCContentFilter(display: display, excludingWindows: [])
     let config = SCStreamConfiguration()
     config.width = Int(display.width)
