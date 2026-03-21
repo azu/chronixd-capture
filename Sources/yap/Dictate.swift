@@ -42,6 +42,10 @@ struct Dictate: AsyncParsableCommand {
         help: "Use screen context to improve transcription accuracy with on-device LLM."
     ) var contextAware: Bool = false
 
+    @Flag(
+        help: "Print captured screen context to stderr for debugging (requires --context-aware)."
+    ) var debugContext: Bool = false
+
     @MainActor mutating func run() async throws {
         guard SpeechTranscriber.isAvailable else {
             throw Transcribe.Error.speechTranscriberNotAvailable
@@ -175,6 +179,7 @@ struct Dictate: AsyncParsableCommand {
         let format = outputFormat
         let sentenceMaxLength = maxLength
         let useContextAware = contextAware
+        let showDebugContext = debugContext
 
         if useContextAware {
             let screenCapture = ScreenContextCapture()
@@ -189,6 +194,9 @@ struct Dictate: AsyncParsableCommand {
                         screenContext = (try? await screenCapture.capture()) ?? ScreenContext(
                             appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: now
                         )
+                        if showDebugContext {
+                            logScreenContext(screenContext)
+                        }
                     } else {
                         screenContext = ScreenContext(
                             appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: now
@@ -223,6 +231,9 @@ struct Dictate: AsyncParsableCommand {
                     let now = Date()
                     if now.timeIntervalSince(lastResultTime) > 1.5 {
                         currentContext = (try? await screenCapture.capture()) ?? currentContext
+                        if showDebugContext {
+                            logScreenContext(currentContext)
+                        }
                     }
                     lastResultTime = now
 
@@ -298,6 +309,27 @@ struct Dictate: AsyncParsableCommand {
             }
         }
     }
+}
+
+// MARK: - Debug Helpers
+
+private func logScreenContext(_ context: ScreenContext) {
+    var lines: [String] = ["[context-aware] Screen context captured:"]
+    if let appName = context.appName {
+        lines.append("  App: \(appName)")
+    }
+    if let windowTitle = context.windowTitle {
+        lines.append("  Window: \(windowTitle)")
+    }
+    if let focusedElement = context.focusedElement {
+        lines.append("  Focused: \(String(focusedElement.prefix(200)))")
+    }
+    if !context.ocrText.isEmpty {
+        let preview = context.ocrText.prefix(300).replacingOccurrences(of: "\n", with: "\\n")
+        lines.append("  OCR (\(context.ocrText.count) chars): \(preview)")
+    }
+    let message = lines.joined(separator: "\n") + "\n"
+    FileHandle.standardError.write(Data(message.utf8))
 }
 
 // MARK: - MicrophoneCapture
