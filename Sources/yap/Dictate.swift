@@ -377,8 +377,7 @@ private func logScreenContext(_ context: ScreenContext) {
             lines.append("    Screenshot: \(path)")
         }
         if !display.ocrText.isEmpty {
-            lines.append("    OCR (\(display.ocrText.count) chars):")
-            lines.append(display.ocrText)
+            lines.append("    OCR: \(display.ocrText.count) chars")
         }
     }
     if let focusedElement = context.focusedElement {
