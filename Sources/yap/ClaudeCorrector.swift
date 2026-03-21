@@ -2,16 +2,6 @@ import Foundation
 
 /// Corrects transcription using `claude -p` CLI with multimodal input (screenshots).
 final class ClaudeCorrector: Sendable {
-    static let timeoutSeconds: Double = 30
-
-    private static let systemPrompt = """
-        You are a transcription corrector. Given a speech transcription segment, screen context \
-        (application name, window title), and screenshots of the user's displays, correct any \
-        misrecognized words. Focus on: technical terms, proper nouns, and words visible on screen. \
-        Preserve the original meaning. Only fix recognition errors, do not rephrase. \
-        Output ONLY the corrected text, nothing else.
-        """
-
     func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String) {
         do {
             let corrected = try await runClaude(text: text, context: context)
@@ -26,7 +16,22 @@ final class ClaudeCorrector: Sendable {
     }
 
     private func runClaude(text: String, context: ScreenContext) async throws -> String {
-        var prompt = "Transcription: \(text)\n\nScreen context:\n"
+        var prompt = """
+            You are a transcription corrector.
+
+            ## Rules
+            - If the transcription looks correct and nothing on screen contradicts it, output the original text EXACTLY as-is. Do not add punctuation, capitalization, or formatting.
+            - Only fix words that are clearly misrecognized based on what is visible on screen.
+            - Focus on: technical terms, proper nouns, variable/function names, and domain-specific words visible on screen.
+            - Preserve the original meaning and style. Do not rephrase.
+            - Output ONLY the corrected (or unchanged) text. No explanations, no quotes, no prefixes.
+
+            ## Transcription
+            \(text)
+
+            ## Screen Context
+
+            """
         if let appName = context.appName {
             prompt += "Application: \(appName)\n"
         }
@@ -37,18 +42,22 @@ final class ClaudeCorrector: Sendable {
             prompt += "Focused element: \(focusedElement)\n"
         }
         if !context.screenshotPaths.isEmpty {
-            prompt += "\nScreenshots of the user's displays are attached."
+            prompt += "\nScreenshots of the user's displays (read these files to see what's on screen):\n"
+            for path in context.screenshotPaths {
+                prompt += "- \(path)\n"
+            }
         }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-
-        var arguments = ["claude", "-p", "--output-format", "text"]
-        for path in context.screenshotPaths {
-            arguments += ["--file", path]
-        }
-        arguments.append(prompt)
-        process.arguments = arguments
+        process.arguments = [
+            "claude", "-p",
+            "--output-format", "text",
+            "--no-session-persistence",
+            "--disable-slash-commands",
+            "--dangerously-skip-permissions",
+            prompt,
+        ]
 
         let stdout = Pipe()
         let stderr = Pipe()
