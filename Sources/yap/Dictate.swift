@@ -66,6 +66,11 @@ struct Dictate: AsyncParsableCommand {
 
     @Option(
         name: .long,
+        help: "Model to use for claude backend (e.g. haiku, sonnet, opus). Default: haiku."
+    ) var claudeModel: String = "haiku"
+
+    @Option(
+        name: .long,
         help: "Comma-separated keywords to detect media/video sites in window titles. Matched displays are flagged as playing media.",
         transform: { $0.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
     ) var ignoreTitles: [String]?
@@ -215,7 +220,7 @@ struct Dictate: AsyncParsableCommand {
             }
             let corrector: any Corrector = switch backend {
             case .local: TranscriptionCorrector()
-            case .claude: ClaudeCorrector()
+            case .claude: ClaudeCorrector(model: claudeModel)
             }
             let useClaude = backend == .claude
 
@@ -282,11 +287,11 @@ struct Dictate: AsyncParsableCommand {
                             print("[context-aware] Correction took \(elapsed)")
                             fflush(stdout)
                         }
-                        if correction.original != correction.corrected {
-                            print("\(correction.original) → \(correction.corrected)")
-                        } else {
-                            print(correction.corrected)
+                        if showDebug && correction.original == correction.corrected {
+                            print("[context-aware] No correction applied")
+                            fflush(stdout)
                         }
+                        print(correction.corrected)
                         fflush(stdout)
                     }
                 }

@@ -330,11 +330,16 @@ private func captureAllDisplays(
     return results
 }
 
+/// Maximum screenshot width. Images are scaled down to save tokens when sent to Claude.
+private let maxScreenshotWidth = 1280
+
 private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {
     let filter = SCContentFilter(display: display, excludingWindows: [])
     let config = SCStreamConfiguration()
-    config.width = Int(display.width)
-    config.height = Int(display.height)
+    // Scale down to maxScreenshotWidth, preserving aspect ratio
+    let scale = min(1.0, Double(maxScreenshotWidth) / Double(display.width))
+    config.width = Int(Double(display.width) * scale)
+    config.height = Int(Double(display.height) * scale)
     config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
     config.capturesAudio = false
 

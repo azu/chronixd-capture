@@ -5,6 +5,12 @@ final class ClaudeCorrector: Sendable {
     /// Timeout in seconds for each claude invocation.
     static let timeoutSeconds: UInt64 = 30
 
+    let model: String
+
+    init(model: String = "haiku") {
+        self.model = model
+    }
+
     func correct(text: String, context: ScreenContext) async -> (original: String, corrected: String) {
         do {
             let corrected = try await withTimeout(seconds: Self.timeoutSeconds) {
@@ -62,6 +68,7 @@ final class ClaudeCorrector: Sendable {
         process.arguments = [
             "claude", "-p",
             "--output-format", "text",
+            "--model", model,
             "--no-session-persistence",
             "--disable-slash-commands",
             "--dangerously-skip-permissions",
