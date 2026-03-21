@@ -37,20 +37,21 @@ final class ClaudeCorrector: Sendable {
             ## Screen Context
 
             """
-        if let appName = context.appName {
-            prompt += "Application: \(appName)\n"
-        }
-        if let windowTitle = context.windowTitle {
-            prompt += "Window: \(windowTitle)\n"
+        for (i, display) in context.displays.enumerated() {
+            prompt += "### Display \(i + 1)\n"
+            if let appName = display.appName {
+                prompt += "Application: \(appName)\n"
+            }
+            if let windowTitle = display.windowTitle {
+                prompt += "Window: \(windowTitle)\n"
+            }
+            if let path = display.screenshotPath {
+                prompt += "Screenshot (read this file): \(path)\n"
+            }
+            prompt += "\n"
         }
         if let focusedElement = context.focusedElement {
             prompt += "Focused element: \(focusedElement)\n"
-        }
-        if !context.screenshotPaths.isEmpty {
-            prompt += "\nScreenshots of the user's displays (read these files to see what's on screen):\n"
-            for path in context.screenshotPaths {
-                prompt += "- \(path)\n"
-            }
         }
 
         let process = Process()

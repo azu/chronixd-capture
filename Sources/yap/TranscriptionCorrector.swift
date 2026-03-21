@@ -39,17 +39,20 @@ actor TranscriptionCorrector {
 
     private func performCorrection(text: String, context: ScreenContext) async throws -> String {
         var prompt = "Transcription: \(text)\n\nScreen context:\n"
-        if let appName = context.appName {
-            prompt += "Application: \(appName)\n"
-        }
-        if let windowTitle = context.windowTitle {
-            prompt += "Window: \(windowTitle)\n"
+        for display in context.displays {
+            if let appName = display.appName {
+                prompt += "Application: \(appName)\n"
+            }
+            if let windowTitle = display.windowTitle {
+                prompt += "Window: \(windowTitle)\n"
+            }
+            if !display.ocrText.isEmpty {
+                prompt += "Screen text:\n\(display.ocrText)\n"
+            }
+            prompt += "\n"
         }
         if let focusedElement = context.focusedElement {
             prompt += "Focused element: \(focusedElement)\n"
-        }
-        if !context.ocrText.isEmpty {
-            prompt += "Screen text:\n\(context.ocrText)\n"
         }
 
         let result = try await session.respond(

@@ -6,13 +6,17 @@ import Vision
 
 // MARK: - ScreenContext
 
-struct ScreenContext: Sendable {
+struct DisplayContext: Sendable {
+    let displayID: CGDirectDisplayID
     let appName: String?
     let windowTitle: String?
-    let focusedElement: String?
     let ocrText: String
-    /// File paths to screenshot PNGs (one per display). Used by claude mode.
-    let screenshotPaths: [String]
+    let screenshotPath: String?
+}
+
+struct ScreenContext: Sendable {
+    let displays: [DisplayContext]
+    let focusedElement: String?
     let timestamp: Date
 }
 
@@ -24,14 +28,12 @@ final class ScreenContextCapture: Sendable {
     /// Capture screen context with Vision OCR (for local mode).
     @MainActor
     func capture() async throws -> ScreenContext {
-        let info = captureAccessibilityInfo()
-        let (text, paths) = try await captureAllDisplays(ocr: true)
+        let windowsByDisplay = captureVisibleWindows()
+        let focusedElement = captureFocusedElement()
+        let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay)
         return ScreenContext(
-            appName: info.appName,
-            windowTitle: info.windowTitle,
-            focusedElement: info.focusedElement,
-            ocrText: text,
-            screenshotPaths: paths,
+            displays: displays,
+            focusedElement: focusedElement,
             timestamp: Date()
         )
     }
@@ -39,71 +41,80 @@ final class ScreenContextCapture: Sendable {
     /// Capture screen context with screenshots only, no OCR (for claude mode).
     @MainActor
     func captureWithScreenshots() async throws -> ScreenContext {
-        let info = captureAccessibilityInfo()
-        let (_, paths) = try await captureAllDisplays(ocr: false)
+        let windowsByDisplay = captureVisibleWindows()
+        let focusedElement = captureFocusedElement()
+        let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay)
         return ScreenContext(
-            appName: info.appName,
-            windowTitle: info.windowTitle,
-            focusedElement: info.focusedElement,
-            ocrText: "",
-            screenshotPaths: paths,
+            displays: displays,
+            focusedElement: focusedElement,
             timestamp: Date()
         )
     }
 }
 
-// MARK: - Accessibility Info
+// MARK: - Window Info Capture
 
-private struct AccessibilityInfo {
-    let appName: String?
-    let windowTitle: String?
-    let focusedElement: String?
+/// Get the top-most user window per display using CGWindowListCopyWindowInfo.
+/// Returns a dictionary keyed by display ID.
+private func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, windowTitle: String?)] {
+    guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        return [:]
+    }
+
+    let myPID = ProcessInfo.processInfo.processIdentifier
+    var seenDisplays = Set<CGDirectDisplayID>()
+    var results: [CGDirectDisplayID: (appName: String, windowTitle: String?)] = [:]
+
+    for window in windowList {
+        guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+        guard let pid = window[kCGWindowOwnerPID as String] as? Int32, pid != myPID else { continue }
+        guard let appName = window[kCGWindowOwnerName as String] as? String else { continue }
+        if ["WindowManager", "Control Center", "Notification Center"].contains(appName) { continue }
+
+        guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+              let x = bounds["X"] as? CGFloat,
+              let y = bounds["Y"] as? CGFloat else { continue }
+        let point = CGPoint(x: x + 1, y: y + 1)
+        var displayCount: UInt32 = 0
+        var displayID: CGDirectDisplayID = 0
+        CGGetDisplaysWithPoint(point, 1, &displayID, &displayCount)
+        guard displayCount > 0 else { continue }
+
+        // One window per display (windows are ordered front-to-back)
+        guard !seenDisplays.contains(displayID) else { continue }
+        seenDisplays.insert(displayID)
+
+        let windowTitle = window[kCGWindowName as String] as? String
+        results[displayID] = (appName: appName, windowTitle: windowTitle)
+    }
+
+    return results
 }
 
+/// Get the focused UI element text from the frontmost app via Accessibility API.
 @MainActor
-private func captureAccessibilityInfo() -> AccessibilityInfo {
-    guard let app = NSWorkspace.shared.frontmostApplication else {
-        return AccessibilityInfo(appName: nil, windowTitle: nil, focusedElement: nil)
-    }
-    let appName = app.localizedName
-
+private func captureFocusedElement() -> String? {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
     let axApp = AXUIElementCreateApplication(app.processIdentifier)
-    var windowValue: CFTypeRef?
-    AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &windowValue)
-
-    var windowTitle: String?
-    if let window = windowValue {
-        var titleValue: CFTypeRef?
-        // swiftlint:disable:next force_cast
-        AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleValue)
-        windowTitle = titleValue as? String
-    }
-
     var focusedValue: CFTypeRef?
     AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedValue)
-    var focusedElement: String?
-    if let focused = focusedValue {
-        var valueRef: CFTypeRef?
-        // swiftlint:disable:next force_cast
-        AXUIElementCopyAttributeValue(focused as! AXUIElement, kAXValueAttribute as CFString, &valueRef)
-        if let value = valueRef as? String {
-            focusedElement = String(value.prefix(500))
-        }
-    }
-
-    return AccessibilityInfo(appName: appName, windowTitle: windowTitle, focusedElement: focusedElement)
+    guard let focused = focusedValue else { return nil }
+    var valueRef: CFTypeRef?
+    // swiftlint:disable:next force_cast
+    AXUIElementCopyAttributeValue(focused as! AXUIElement, kAXValueAttribute as CFString, &valueRef)
+    guard let value = valueRef as? String else { return nil }
+    return String(value.prefix(500))
 }
 
 // MARK: - OCR Screen Capture
 
-/// Capture all displays. Returns (ocrText, screenshotPaths).
-/// When `ocr` is false, OCR is skipped and ocrText is empty.
-private func captureAllDisplays(ocr: Bool) async throws -> (String, [String]) {
+/// Capture all displays and return per-display context with matched window info.
+private func captureAllDisplays(
+    ocr: Bool,
+    windowsByDisplay: [CGDirectDisplayID: (appName: String, windowTitle: String?)]
+) async throws -> [DisplayContext] {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-    guard !content.displays.isEmpty else { return ("", []) }
-
-    var ocrResults: [String] = []
-    var paths: [String] = []
+    guard !content.displays.isEmpty else { return [] }
 
     // Create timestamped directory: /tmp/yap/YYYYMMDD-HHmmss/
     let yapDir = NSTemporaryDirectory() + "yap/"
@@ -115,29 +126,41 @@ private func captureAllDisplays(ocr: Bool) async throws -> (String, [String]) {
     // Keep only the most recent 60 capture directories
     cleanupOldCaptures(in: yapDir, keep: 60)
 
+    var results: [DisplayContext] = []
+
     for display in content.displays {
         let image = try await captureDisplayImage(display)
 
-        // Save screenshot to timestamped directory
+        // Save screenshot
+        var screenshotPath: String?
         let path = dir + "display-\(display.displayID).png"
         if let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil) {
             CGImageDestinationAddImage(dest, image, nil)
             if CGImageDestinationFinalize(dest) {
-                paths.append(path)
+                screenshotPath = path
             }
         }
 
+        // OCR
+        var ocrText = ""
         if ocr {
             let text = try await performOCR(on: image)
-            if !text.isEmpty {
-                ocrResults.append(text)
-            }
+            ocrText = String(text.prefix(ScreenContextCapture.maxOCRLength))
         }
+
+        // Match window info for this display
+        let windowInfo = windowsByDisplay[display.displayID]
+
+        results.append(DisplayContext(
+            displayID: display.displayID,
+            appName: windowInfo?.appName,
+            windowTitle: windowInfo?.windowTitle,
+            ocrText: ocrText,
+            screenshotPath: screenshotPath
+        ))
     }
 
-    let combined = ocrResults.joined(separator: "\n")
-    let ocrText = String(combined.prefix(ScreenContextCapture.maxOCRLength))
-    return (ocrText, paths)
+    return results
 }
 
 private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {

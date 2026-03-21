@@ -210,8 +210,7 @@ struct Dictate: AsyncParsableCommand {
             let useClaude = backend == .claude
 
             let emptyContext = ScreenContext(
-                appName: nil, windowTitle: nil, focusedElement: nil,
-                ocrText: "", screenshotPaths: [], timestamp: Date()
+                displays: [], focusedElement: nil, timestamp: Date()
             )
 
             if format == .txt {
@@ -366,21 +365,24 @@ struct Dictate: AsyncParsableCommand {
 
 private func logScreenContext(_ context: ScreenContext) {
     var lines: [String] = ["[context-aware] Screen context captured:"]
-    if let appName = context.appName {
-        lines.append("  App: \(appName)")
-    }
-    if let windowTitle = context.windowTitle {
-        lines.append("  Window: \(windowTitle)")
+    for (i, display) in context.displays.enumerated() {
+        lines.append("  Display \(i + 1) (ID: \(display.displayID)):")
+        if let appName = display.appName {
+            lines.append("    App: \(appName)")
+        }
+        if let windowTitle = display.windowTitle {
+            lines.append("    Window: \(windowTitle)")
+        }
+        if let path = display.screenshotPath {
+            lines.append("    Screenshot: \(path)")
+        }
+        if !display.ocrText.isEmpty {
+            lines.append("    OCR (\(display.ocrText.count) chars):")
+            lines.append(display.ocrText)
+        }
     }
     if let focusedElement = context.focusedElement {
         lines.append("  Focused: \(focusedElement)")
-    }
-    if !context.ocrText.isEmpty {
-        lines.append("  OCR (\(context.ocrText.count) chars):")
-        lines.append(context.ocrText)
-    }
-    if !context.screenshotPaths.isEmpty {
-        lines.append("  Screenshots: \(context.screenshotPaths.joined(separator: ", "))")
     }
     let message = lines.joined(separator: "\n")
     print(message)
