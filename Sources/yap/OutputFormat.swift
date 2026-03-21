@@ -7,6 +7,7 @@ enum OutputFormat: String, EnumerableFlag {
     case srt
     case vtt
     case json
+    case ndjson
 
     // MARK: Internal
 
@@ -20,7 +21,7 @@ enum OutputFormat: String, EnumerableFlag {
     var needsAudioTimeRange: Bool {
         switch self {
         case .txt: false
-        case .srt, .vtt, .json: true
+        case .srt, .vtt, .json, .ndjson: true
         }
     }
 
@@ -29,6 +30,7 @@ enum OutputFormat: String, EnumerableFlag {
         switch self {
         case .srt, .vtt: "\n\n"
         case .json: ",\n"
+        case .ndjson: "\n"
         case .txt: nil
         }
     }
@@ -37,7 +39,7 @@ enum OutputFormat: String, EnumerableFlag {
     var footer: String? {
         switch self {
         case .json: "  ]\n}"
-        default: nil
+        case .ndjson, .txt, .srt, .vtt: nil
         }
     }
 
@@ -112,6 +114,18 @@ enum OutputFormat: String, EnumerableFlag {
                 return str.components(separatedBy: "\n").map { "    " + $0 }.joined(separator: "\n")
             }
             return "    {}"
+        case .ndjson:
+            var dict: [String: Any] = [
+                "start": Self.jsonTime(timeRange.start.seconds),
+                "end": Self.jsonTime(timeRange.end.seconds),
+                "text": text,
+            ]
+            if let speaker { dict["speaker"] = speaker }
+            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+               let str = String(data: data, encoding: .utf8) {
+                return str
+            }
+            return "{}"
         }
     }
 
@@ -171,6 +185,19 @@ enum OutputFormat: String, EnumerableFlag {
                 return str.components(separatedBy: "\n").map { "    " + $0 }.joined(separator: "\n")
             }
             return "    {}"
+        case .ndjson:
+            // Output corrected text only
+            var dict: [String: Any] = [
+                "start": Self.jsonTime(timeRange.start.seconds),
+                "end": Self.jsonTime(timeRange.end.seconds),
+                "text": corrected,
+            ]
+            if let speaker { dict["speaker"] = speaker }
+            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+               let str = String(data: data, encoding: .utf8) {
+                return str
+            }
+            return "{}"
         }
     }
 
@@ -223,6 +250,10 @@ enum OutputFormat: String, EnumerableFlag {
             }).joined(separator: "\n\n")
         case .json:
             return formatJSON(segments, locale: locale)
+        case .ndjson:
+            return segments.enumerated().map { i, seg in
+                formatSegment(index: i + 1, timeRange: seg.timeRange, text: seg.text, speaker: seg.speaker)
+            }.joined(separator: "\n")
         }
     }
 
