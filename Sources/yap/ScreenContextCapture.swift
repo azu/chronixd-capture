@@ -45,7 +45,7 @@ final class ScreenContextCapture: Sendable {
     func capture() async throws -> ScreenContext {
         let windowsByDisplay = captureVisibleWindows()
         let focusedElement = captureFocusedElement()
-        let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay)
+        let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords)
         return ScreenContext(
             displays: displays,
             focusedElement: focusedElement,
@@ -58,7 +58,7 @@ final class ScreenContextCapture: Sendable {
     func captureWithScreenshots() async throws -> ScreenContext {
         let windowsByDisplay = captureVisibleWindows()
         let focusedElement = captureFocusedElement()
-        let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay)
+        let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords)
         return ScreenContext(
             displays: displays,
             focusedElement: focusedElement,
@@ -196,7 +196,8 @@ private func captureFocusedElement() -> String? {
 /// Capture all displays and return per-display context with matched window info.
 private func captureAllDisplays(
     ocr: Bool,
-    windowsByDisplay: [CGDirectDisplayID: (appName: String, windowTitle: String?)]
+    windowsByDisplay: [CGDirectDisplayID: (appName: String, windowTitle: String?)],
+    mediaTitleKeywords: [String]
 ) async throws -> [DisplayContext] {
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     guard !content.displays.isEmpty else { return [] }
@@ -236,7 +237,11 @@ private func captureAllDisplays(
         // Match window info for this display
         let windowInfo = windowsByDisplay[display.displayID]
 
-        let isMedia = isMediaTitle(windowInfo?.windowTitle)
+        let isMedia: Bool = if let title = windowInfo?.windowTitle {
+            mediaTitleKeywords.contains { title.localizedCaseInsensitiveContains($0) }
+        } else {
+            false
+        }
 
         results.append(DisplayContext(
             displayID: display.displayID,
