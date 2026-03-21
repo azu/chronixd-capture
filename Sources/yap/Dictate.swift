@@ -64,6 +64,12 @@ struct Dictate: AsyncParsableCommand {
         help: "Print captured screen context to stdout for debugging (requires --context-aware)."
     ) var debug: Bool = false
 
+    @Option(
+        name: .long,
+        help: "Comma-separated keywords to detect media/video sites in window titles. Matched displays are flagged as playing media.",
+        transform: { $0.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+    ) var ignoreTitles: [String]?
+
     @MainActor mutating func run() async throws {
         guard SpeechTranscriber.isAvailable else {
             throw Transcribe.Error.speechTranscriberNotAvailable
@@ -202,7 +208,11 @@ struct Dictate: AsyncParsableCommand {
         let showDebug = debug
 
         if let backend {
-            let screenCapture = ScreenContextCapture()
+            let screenCapture = if let ignoreTitles {
+                ScreenContextCapture(mediaTitleKeywords: ignoreTitles)
+            } else {
+                ScreenContextCapture()
+            }
             let corrector: any Corrector = switch backend {
             case .local: TranscriptionCorrector()
             case .claude: ClaudeCorrector()
@@ -375,6 +385,9 @@ private func logScreenContext(_ context: ScreenContext) {
         }
         if let path = display.screenshotPath {
             lines.append("    Screenshot: \(path)")
+        }
+        if display.isPlayingMedia {
+            lines.append("    Media: playing (audio may be mixed)")
         }
         if !display.ocrText.isEmpty {
             lines.append("    OCR: \(display.ocrText.count) chars")

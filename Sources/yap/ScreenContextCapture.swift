@@ -12,7 +12,16 @@ struct DisplayContext: Sendable {
     let windowTitle: String?
     let ocrText: String
     let screenshotPath: String?
+    /// Whether this display appears to be playing media (video/streaming site).
+    let isPlayingMedia: Bool
 }
+
+/// Default keywords to detect media/video sites in window titles.
+let defaultMediaTitleKeywords = [
+    "YouTube", "ニコニコ", "Netflix", "Prime Video", "Disney+",
+    "Twitch", "TVer", "ABEMA", "U-NEXT", "Hulu", "dアニメ",
+    "Crunchyroll", "Spotify", "Apple Music", "Apple TV",
+]
 
 struct ScreenContext: Sendable {
     let displays: [DisplayContext]
@@ -24,6 +33,12 @@ struct ScreenContext: Sendable {
 
 final class ScreenContextCapture: Sendable {
     static let maxOCRLength = 2000
+
+    let mediaTitleKeywords: [String]
+
+    init(mediaTitleKeywords: [String] = defaultMediaTitleKeywords) {
+        self.mediaTitleKeywords = mediaTitleKeywords
+    }
 
     /// Capture screen context with Vision OCR (for local mode).
     @MainActor
@@ -49,6 +64,12 @@ final class ScreenContextCapture: Sendable {
             focusedElement: focusedElement,
             timestamp: Date()
         )
+    }
+
+    func isMediaTitle(_ title: String?) -> Bool {
+        guard let title else { return false }
+        let lowered = title.lowercased()
+        return mediaTitleKeywords.contains { lowered.contains($0.lowercased()) }
     }
 }
 
@@ -215,12 +236,15 @@ private func captureAllDisplays(
         // Match window info for this display
         let windowInfo = windowsByDisplay[display.displayID]
 
+        let isMedia = isMediaTitle(windowInfo?.windowTitle)
+
         results.append(DisplayContext(
             displayID: display.displayID,
             appName: windowInfo?.appName,
             windowTitle: windowInfo?.windowTitle,
             ocrText: ocrText,
-            screenshotPath: screenshotPath
+            screenshotPath: screenshotPath,
+            isPlayingMedia: isMedia
         ))
     }
 
