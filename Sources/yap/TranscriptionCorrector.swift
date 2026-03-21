@@ -56,13 +56,13 @@ actor TranscriptionCorrector {
             to: prompt,
             generating: CorrectionResult.self
         )
-        return result.corrected
+        return result.content.corrected
     }
 
     /// Execute an async closure with a timeout. Cancels the operation on timeout.
     private func withTimeout<T: Sendable>(
         seconds: UInt64,
-        operation: @Sendable () async throws -> T
+        operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let task = Task { try await operation() }
         let timeoutTask = Task {

@@ -1,6 +1,9 @@
+import ApplicationServices
 import ArgumentParser
 @preconcurrency import AVFoundation
+import FoundationModels
 @preconcurrency import Noora
+import ScreenCaptureKit
 import Speech
 
 private nonisolated(unsafe) var dictateSignalWriteFD: Int32 = -1
@@ -35,9 +38,27 @@ struct Dictate: AsyncParsableCommand {
         help: "Include word-level timestamps in JSON output."
     ) var wordTimestamps: Bool = false
 
+    @Flag(
+        help: "Use screen context to improve transcription accuracy with on-device LLM."
+    ) var contextAware: Bool = false
+
     @MainActor mutating func run() async throws {
         guard SpeechTranscriber.isAvailable else {
             throw Transcribe.Error.speechTranscriberNotAvailable
+        }
+
+        if contextAware {
+            guard SystemLanguageModel.default.availability == .available else {
+                throw DictateError.languageModelNotAvailable
+            }
+            guard AXIsProcessTrusted() else {
+                throw DictateError.accessibilityPermissionDenied
+            }
+            do {
+                _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            } catch {
+                throw DictateError.screenRecordingPermissionDenied
+            }
         }
 
         let supportedLocales = await SpeechTranscriber.supportedLocales
@@ -54,7 +75,7 @@ struct Dictate: AsyncParsableCommand {
             locale: locale,
             transcriptionOptions: censor ? [.etiquetteReplacements] : [],
             reportingOptions: [],
-            attributeOptions: outputFormat.needsAudioTimeRange ? [.audioTimeRange] : []
+            attributeOptions: (outputFormat.needsAudioTimeRange || contextAware) ? [.audioTimeRange] : []
         )
         let modules: [any SpeechModule] = [transcriber]
 
@@ -153,7 +174,90 @@ struct Dictate: AsyncParsableCommand {
         // Stream results as they arrive
         let format = outputFormat
         let sentenceMaxLength = maxLength
-        if format == .txt {
+        let useContextAware = contextAware
+
+        if useContextAware {
+            let screenCapture = ScreenContextCapture()
+            let corrector = TranscriptionCorrector()
+
+            if format == .txt {
+                var lastResultTime = Date.distantPast
+                for try await result in transcriber.results {
+                    let now = Date()
+                    let screenContext: ScreenContext
+                    if now.timeIntervalSince(lastResultTime) > 1.5 {
+                        screenContext = (try? await screenCapture.capture()) ?? ScreenContext(
+                            appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: now
+                        )
+                    } else {
+                        screenContext = ScreenContext(
+                            appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: now
+                        )
+                    }
+                    lastResultTime = now
+
+                    for chunk in result.text.splitAtTimeGaps(threshold: 1.5) {
+                        let text = String(chunk.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !text.isEmpty else { continue }
+                        let correction = await corrector.correct(text: text, context: screenContext)
+                        if correction.original != correction.corrected {
+                            print("\(correction.original) → \(correction.corrected)")
+                        } else {
+                            print(correction.corrected)
+                        }
+                        fflush(stdout)
+                    }
+                }
+            } else {
+                if let header = format.header(locale: locale) {
+                    print(header)
+                }
+                let includeWords = wordTimestamps
+                var segmentIndex = 0
+                var lastResultTime = Date.distantPast
+                var currentContext = ScreenContext(
+                    appName: nil, windowTitle: nil, focusedElement: nil, ocrText: "", timestamp: Date()
+                )
+
+                for try await result in transcriber.results {
+                    let now = Date()
+                    if now.timeIntervalSince(lastResultTime) > 1.5 {
+                        currentContext = (try? await screenCapture.capture()) ?? currentContext
+                    }
+                    lastResultTime = now
+
+                    for chunk in result.text.splitAtTimeGaps(threshold: 1.5) {
+                        let allWords = includeWords ? chunk.wordTimestamps() : nil
+                        for sentence in chunk.sentences(maxLength: sentenceMaxLength) {
+                            guard let timeRange = sentence.audioTimeRange else { continue }
+                            let text = String(sentence.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !text.isEmpty else { continue }
+                            let words = allWords?.filter {
+                                $0.timeRange.start.seconds >= timeRange.start.seconds
+                                    && $0.timeRange.end.seconds <= timeRange.end.seconds
+                            }
+                            let correction = await corrector.correct(text: text, context: currentContext)
+                            if segmentIndex > 0, let sep = format.segmentSeparator {
+                                print(sep, terminator: "")
+                            }
+                            segmentIndex += 1
+                            print(format.formatCorrectedSegment(
+                                index: segmentIndex,
+                                timeRange: timeRange,
+                                original: correction.original,
+                                corrected: correction.corrected,
+                                words: words
+                            ), terminator: "")
+                            fflush(stdout)
+                        }
+                    }
+                }
+                if segmentIndex > 0 { print() }
+                if let footer = format.footer {
+                    print(footer)
+                }
+            }
+        } else if format == .txt {
             for try await result in transcriber.results {
                 let text = String(result.text.characters)
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -276,6 +380,9 @@ final class MicrophoneCapture: @unchecked Sendable {
 enum DictateError: Swift.Error, LocalizedError {
     case microphonePermissionDenied
     case noCompatibleAudioFormat
+    case languageModelNotAvailable
+    case screenRecordingPermissionDenied
+    case accessibilityPermissionDenied
 
     // MARK: Internal
 
@@ -285,6 +392,12 @@ enum DictateError: Swift.Error, LocalizedError {
             "Microphone permission is required. Grant it to your terminal app in System Settings > Privacy & Security > Microphone, then restart the terminal."
         case .noCompatibleAudioFormat:
             "No compatible audio format available for speech recognition."
+        case .languageModelNotAvailable:
+            "On-device language model is not available. Ensure Apple Intelligence is enabled in System Settings."
+        case .screenRecordingPermissionDenied:
+            "Screen Recording permission is required for --context-aware. Grant it in System Settings > Privacy & Security > Screen Recording."
+        case .accessibilityPermissionDenied:
+            "Accessibility permission is required for --context-aware. Grant it in System Settings > Privacy & Security > Accessibility."
         }
     }
 }
