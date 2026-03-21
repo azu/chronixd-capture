@@ -297,6 +297,10 @@ struct Dictate: AsyncParsableCommand {
                     }
                     lastResultTime = now
 
+                    if showDebug {
+                        print("[context-aware] Mic muted: \(capture.isMuted)")
+                        fflush(stdout)
+                    }
 
                     for chunk in result.text.splitAtTimeGaps(threshold: 1.5) {
                         let text = String(chunk.characters).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -472,7 +476,7 @@ private func logScreenContext(_ context: ScreenContext) {
             lines.append("    Screenshot: \(path)")
         }
         if display.isPlayingMedia {
-            lines.append("    Media: playing (audio may be mixed)")
+            lines.append("    Media site detected")
         }
         if !display.ocrText.isEmpty {
             lines.append("    OCR: \(display.ocrText.count) chars")
