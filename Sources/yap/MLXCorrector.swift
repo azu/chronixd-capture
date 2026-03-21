@@ -8,7 +8,6 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
     static let defaultModelID = "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
 
     private let modelID: String
-    private var session: ChatSession?
     private var modelContext: ModelContext?
 
     /// How far back to include previous segments as context.
@@ -21,24 +20,25 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
 
     /// Load the model eagerly. Call at startup to avoid delays on first correction.
     func loadModelIfNeeded() async throws {
-        _ = try await ensureModel()
+        if modelContext == nil {
+            modelContext = try await loadModel(id: modelID)
+        }
     }
 
-    private func ensureModel() async throws -> ChatSession {
-        if let session { return session }
-        let loaded = try await loadModel(id: modelID)
-        let session = ChatSession(
-            loaded,
+    /// Create a fresh ChatSession per correction to avoid history contamination.
+    private func newSession() async throws -> ChatSession {
+        if modelContext == nil {
+            modelContext = try await loadModel(id: modelID)
+        }
+        return ChatSession(
+            modelContext!,
             processing: UserInput.Processing(resize: CGSize(width: 512, height: 512))
         )
-        self.modelContext = loaded
-        self.session = session
-        return session
     }
 
     func correct(text: String, context: ScreenContext) async -> CorrectionResult {
         do {
-            let session = try await ensureModel()
+            let session = try await newSession()
             let prompt = buildPrompt(text: text, context: context)
             let images: [UserInput.Image] = context.displays.compactMap { display in
                 guard let path = display.screenshotPath else { return nil }
@@ -66,8 +66,8 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
     private func buildPrompt(text: String, context: ScreenContext) -> String {
         var prompt = """
             Fix this voice transcription using the screenshots. \
-            Fix misrecognized words, add punctuation, remove fillers (えーと, あの, まあ). \
-            Output ONLY the corrected text.
+            Fix misrecognized words, add punctuation, remove fillers. \
+            Output ONLY the corrected text. No quotes, no brackets, no explanations.
 
             """
 
