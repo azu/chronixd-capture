@@ -66,10 +66,11 @@ private func captureVisibleWindows() -> [CGDirectDisplayID: (appName: String, wi
     var results: [CGDirectDisplayID: (appName: String, windowTitle: String?)] = [:]
 
     for window in windowList {
-        guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+        // layer 0 = normal windows, negative = fullscreen/spaces. Skip high layers (system overlays like Dock, menubar)
+        guard let layer = window[kCGWindowLayer as String] as? Int, layer <= 0 else { continue }
         guard let pid = window[kCGWindowOwnerPID as String] as? Int32, pid != myPID else { continue }
         guard let appName = window[kCGWindowOwnerName as String] as? String else { continue }
-        if ["WindowManager", "Control Center", "Notification Center"].contains(appName) { continue }
+        if ["WindowManager", "Window Server", "Control Center", "Notification Center", "Dock"].contains(appName) { continue }
 
         guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
               let x = bounds["X"] as? CGFloat,
