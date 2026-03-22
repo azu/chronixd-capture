@@ -11,7 +11,7 @@ struct ContextExplanation: Sendable {
 // MARK: - ContextExplainer Protocol
 
 protocol ContextExplainer: Sendable {
-    func explain(context: ScreenContext) async -> ContextExplanation?
+    func explain(context: ScreenContext, locale: Locale) async -> ContextExplanation?
 }
 
 // MARK: - ClaudeContextExplainer
@@ -24,10 +24,10 @@ final class ClaudeContextExplainer: ContextExplainer, @unchecked Sendable {
         self.model = model
     }
 
-    func explain(context: ScreenContext) async -> ContextExplanation? {
+    func explain(context: ScreenContext, locale: Locale) async -> ContextExplanation? {
         do {
             let raw = try await withTimeout(seconds: Self.timeoutSeconds) {
-                try await self.runClaude(context: context)
+                try await self.runClaude(context: context, locale: locale)
             }
             return Self.parseResponse(raw)
         } catch {
@@ -35,10 +35,11 @@ final class ClaudeContextExplainer: ContextExplainer, @unchecked Sendable {
         }
     }
 
-    private func runClaude(context: ScreenContext) async throws -> String {
+    private func runClaude(context: ScreenContext, locale: Locale) async throws -> String {
+        let lang = Locale.current.localizedString(forIdentifier: locale.identifier(.bcp47)) ?? locale.identifier(.bcp47)
         var prompt = """
             Analyze the screenshots and camera photos to determine what the user is currently doing.
-            Respond in Japanese.
+            Respond in \(lang).
 
             """
         prompt += "## Screen Context\n\n"
@@ -147,15 +148,16 @@ final class MLXContextExplainer: ContextExplainer, @unchecked Sendable {
         }
     }
 
-    func explain(context: ScreenContext) async -> ContextExplanation? {
+    func explain(context: ScreenContext, locale: Locale) async -> ContextExplanation? {
         do {
             let session = try await newSession()
+            let lang = Locale.current.localizedString(forIdentifier: locale.identifier(.bcp47)) ?? locale.identifier(.bcp47)
             let prompt = """
                 Analyze the screenshots and camera photos. What is the user doing?
                 Output EXACTLY 2 lines:
                 ACTIVITY: what user is doing
                 SUMMARY: one-line situation summary
-                Respond in the same language as visible text.
+                Respond in \(lang).
 
                 """
             var images: [UserInput.Image] = context.displays.compactMap { display in

@@ -263,6 +263,7 @@ struct Dictate: AsyncParsableCommand {
         let backend = contextAware
         let showDebug = debug
         let minCorrLength = minCorrectionLength
+        let currentLocale = locale
 
         if let backend {
             let screenCapture = if let ignoreTitles {
@@ -495,7 +496,7 @@ struct Dictate: AsyncParsableCommand {
                                 let now = Date()
                                 guard now.timeIntervalSince(lastExplainTime) >= interval else { return }
                                 lastExplainTime = now
-                                if let explanation = await explainer.explain(context: ctx) {
+                                if let explanation = await explainer.explain(context: ctx, locale: currentLocale) {
                                     if format == .ndjson {
                                         print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
                                     } else {
@@ -622,7 +623,7 @@ struct Dictate: AsyncParsableCommand {
                             if let explainer {
                                 let ctx = currentContext
                                 Task.detached {
-                                    if let explanation = await explainer.explain(context: ctx) {
+                                    if let explanation = await explainer.explain(context: ctx, locale: currentLocale) {
                                         if format == .ndjson {
                                             print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
                                         } else {
