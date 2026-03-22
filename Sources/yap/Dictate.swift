@@ -316,7 +316,7 @@ struct Dictate: AsyncParsableCommand {
                         }
                         // Camera capture
                         if let cameraCapture = cameraCapture {
-                            let cameraImages = cameraCapture.captureAll()
+                            let cameraImages = await cameraCapture.captureAll()
                             let dir = capturedScreenContext.displays.first?.screenshotPath
                                 .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
                                 ?? NSTemporaryDirectory() + "yap/"
@@ -438,7 +438,7 @@ struct Dictate: AsyncParsableCommand {
                         }
                         // Camera capture
                         if let cameraCapture = cameraCapture {
-                            let cameraImages = cameraCapture.captureAll()
+                            let cameraImages = await cameraCapture.captureAll()
                             let dir = currentContext.displays.first?.screenshotPath
                                 .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
                                 ?? NSTemporaryDirectory() + "yap/"

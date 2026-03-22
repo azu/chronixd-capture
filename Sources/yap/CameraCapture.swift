@@ -4,96 +4,103 @@ import CoreMedia
 
 // MARK: - CameraCapture
 
+/// Captures snapshots from specified cameras on demand (no persistent session).
 final class CameraCapture: NSObject, @unchecked Sendable {
-    private let lock = NSLock()
-    private var sessions: [(session: AVCaptureSession, deviceID: String)] = []
-    private var delegates: [FrameDelegate] = []
-    private var latestFrames: [String: CMSampleBuffer] = [:]
+    private let devices: [(device: AVCaptureDevice, deviceID: String)]
     private let ciContext = CIContext()
 
-    /// Initialize with device IDs and start capture sessions.
+    /// Initialize with device IDs. Validates that all devices exist but does NOT start sessions.
     init(deviceIDs: [String]) throws {
-        super.init()
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .external],
             mediaType: .video,
             position: .unspecified
         )
+        var resolved: [(device: AVCaptureDevice, deviceID: String)] = []
         for id in deviceIDs {
             guard let device = discovery.devices.first(where: { $0.uniqueID == id }) else {
                 let available = discovery.devices.map { "\($0.localizedName)\t\($0.uniqueID)" }.joined(separator: "\n")
                 throw CameraCaptureError.deviceNotFound(id: id, available: available)
             }
-            let session = AVCaptureSession()
-            session.sessionPreset = .high
-            let input = try AVCaptureDeviceInput(device: device)
-            guard session.canAddInput(input) else {
-                throw CameraCaptureError.cannotAddInput(id: id)
-            }
-            session.addInput(input)
+            resolved.append((device: device, deviceID: id))
+        }
+        self.devices = resolved
+        super.init()
+    }
 
-            let output = AVCaptureVideoDataOutput()
-            output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-            output.alwaysDiscardsLateVideoFrames = true
-            let delegateHandler = FrameDelegate(deviceID: id) { [weak self] deviceID, sampleBuffer in
-                self?.updateFrame(deviceID: deviceID, sampleBuffer: sampleBuffer)
+    /// Capture a snapshot from all configured cameras.
+    /// Starts a session per camera, grabs one frame, then stops.
+    func captureAll() async -> [(deviceID: String, image: CGImage)] {
+        await withTaskGroup(of: (String, CGImage?).self) { group in
+            for (device, id) in devices {
+                group.addTask {
+                    let image = await self.captureFrame(from: device)
+                    return (id, image)
+                }
             }
-            output.setSampleBufferDelegate(delegateHandler, queue: DispatchQueue(label: "yap.camera.\(id)"))
-            guard session.canAddOutput(output) else {
-                throw CameraCaptureError.cannotAddOutput(id: id)
+            var results: [(deviceID: String, image: CGImage)] = []
+            for await (id, image) in group {
+                if let image {
+                    results.append((deviceID: id, image: image))
+                }
             }
-            session.addOutput(output)
+            return results
+        }
+    }
 
-            delegates.append(delegateHandler)
+    /// Capture a single frame from a device.
+    private func captureFrame(from device: AVCaptureDevice) async -> CGImage? {
+        let session = AVCaptureSession()
+        session.sessionPreset = .high
+
+        guard let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else { return nil }
+        session.addInput(input)
+
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.alwaysDiscardsLateVideoFrames = true
+        guard session.canAddOutput(output) else { return nil }
+        session.addOutput(output)
+
+        return await withCheckedContinuation { continuation in
+            let delegate = SingleFrameDelegate { sampleBuffer in
+                session.stopRunning()
+                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent)
+                continuation.resume(returning: cgImage)
+            }
+            // Keep delegate alive via associated object
+            objc_setAssociatedObject(output, "delegate", delegate, .OBJC_ASSOCIATION_RETAIN)
+            output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "yap.camera.\(device.uniqueID)"))
             session.startRunning()
-            sessions.append((session: session, deviceID: id))
         }
     }
 
-    /// Get the latest frame from all configured cameras as CGImages.
-    func captureAll() -> [(deviceID: String, image: CGImage)] {
-        lock.lock()
-        let frames = latestFrames
-        lock.unlock()
-
-        var results: [(deviceID: String, image: CGImage)] = []
-        for (_, id) in sessions {
-            guard let sampleBuffer = frames[id],
-                  let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { continue }
-            results.append((deviceID: id, image: cgImage))
-        }
-        return results
-    }
-
-    /// Stop all capture sessions.
-    func stop() {
-        for (session, _) in sessions {
-            session.stopRunning()
-        }
-    }
-
-    private func updateFrame(deviceID: String, sampleBuffer: CMSampleBuffer) {
-        lock.lock()
-        latestFrames[deviceID] = sampleBuffer
-        lock.unlock()
-    }
+    /// No-op for API compatibility. Sessions are not persistent.
+    func stop() {}
 }
 
-// MARK: - FrameDelegate
+// MARK: - SingleFrameDelegate
 
-private final class FrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
-    let deviceID: String
-    let handler: (String, CMSampleBuffer) -> Void
+private final class SingleFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: ((CMSampleBuffer) -> Void)?
 
-    init(deviceID: String, handler: @escaping (String, CMSampleBuffer) -> Void) {
-        self.deviceID = deviceID
+    init(handler: @escaping (CMSampleBuffer) -> Void) {
         self.handler = handler
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        handler(deviceID, sampleBuffer)
+        lock.lock()
+        let h = handler
+        handler = nil
+        lock.unlock()
+        h?(sampleBuffer)
     }
 }
 
