@@ -268,6 +268,73 @@ done
 xcrun metallib /tmp/mlx_*.air -o .build/release/mlx.metallib
 ```
 
+### Capture & Context
+
+`yap capture` periodically saves transcription, screenshots, OCR text, and window metadata to disk. `yap context` queries the saved data by time range.
+
+```
+USAGE: yap capture --data-dir <data-dir> [--interval <interval>] [--camera <camera> ...] [--no-dedup] [--locale <locale>]
+
+OPTIONS:
+  --data-dir <data-dir>   Persistent data directory (required).
+  --interval <interval>   Capture interval in seconds (default: 30, minimum: 5).
+  --camera <camera>       Camera device ID to capture. Can be specified multiple times.
+  --no-dedup              Disable deduplication.
+  -l, --locale <locale>   (default: current)
+  -h, --help              Show help information.
+```
+
+```
+USAGE: yap context --data-dir <data-dir> [--from <from>] [--to <to>] [--last <last>] [--detail]
+
+OPTIONS:
+  --data-dir <data-dir>   Data directory (required).
+  --from <from>           Start time (ISO 8601 or HH:mm for today).
+  --to <to>               End time (defaults to now).
+  --last <last>           Duration like 30m, 1h, 2h30m.
+  --detail                Output all record types with full fields.
+  -h, --help              Show help information.
+```
+
+> Microphone, Screen Recording, and Accessibility permissions are required. Camera permission is needed when using `--camera`.
+
+Output is NDJSON with `type` field per record: `screenshot`, `transcription`, `camera`, `summary`.
+
+#### Examples
+
+```bash
+# Start capturing to ~/yap-data
+yap capture --data-dir ~/yap-data
+
+# Capture with 10-second interval and webcam
+yap capture --data-dir ~/yap-data --interval 10 --camera "builtin_1"
+
+# Query last 30 minutes (index: screenshot metadata only)
+yap context --data-dir ~/yap-data --last 30m
+
+# Query with full details (OCR text, image paths, transcription)
+yap context --data-dir ~/yap-data --last 1h --detail
+
+# Query a specific time range
+yap context --data-dir ~/yap-data --from "10:00" --to "11:30" --detail
+
+# Pipe to Claude for activity analysis
+yap context --data-dir ~/yap-data --last 30m --detail | claude -p "What was I doing?"
+```
+
+#### Data Storage
+
+| Data | Location | Lifetime |
+|------|----------|----------|
+| Screenshots | `/tmp/yap/{session}/screenshots/` | Temporary (OS cleanup) |
+| Camera images | `/tmp/yap/{session}/cameras/` | Temporary |
+| Structured data (NDJSON) | `{data-dir}/captures/` | Persistent |
+| Summaries (NDJSON) | `{data-dir}/summaries/` | Persistent (written by external tools) |
+
+#### Deduplication
+
+By default, captures are skipped when window metadata (app, title, URL) and OCR text hash are unchanged from the previous capture. Captures with pending transcription segments are never skipped. Use `--no-dedup` to disable.
+
 ### MCP Server
 
 yap includes an [MCP](https://modelcontextprotocol.io) server that exposes a `transcribe` tool, allowing any MCP-compatible agent to transcribe audio and video files.

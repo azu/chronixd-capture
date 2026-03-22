@@ -12,6 +12,8 @@ import ArgumentParser
             ListenAndDictate.self,
             MCP_Command.self,
             Cameras.self,
+            Capture.self,
+            Context.self,
         ],
         defaultSubcommand: Transcribe.self
     )

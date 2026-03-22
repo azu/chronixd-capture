@@ -245,13 +245,54 @@ private func looksLikeURL(_ value: String) -> Bool {
     return trimmed.contains("://") || (trimmed.contains(".") && !trimmed.contains(" ") && trimmed.count > 5)
 }
 
-/// Returns the CGDirectDisplayID of the display containing the key window.
+/// Returns the CGDirectDisplayID of the display containing the frontmost application's window.
+/// Uses NSWorkspace.frontmostApplication to get the actual focused app, then finds its
+/// topmost window via CGWindowList to determine the display.
 @MainActor
 private func activeDisplayID() -> CGDirectDisplayID {
-    if let mainScreen = NSScreen.main,
-       let screenNumber = mainScreen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
-        return screenNumber
+    guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+        return CGMainDisplayID()
     }
+    let frontPID = frontApp.processIdentifier
+
+    // Find the frontmost app's topmost window to determine its display
+    guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        return CGMainDisplayID()
+    }
+
+    for window in windowList {
+        guard let pid = window[kCGWindowOwnerPID as String] as? Int32, pid == frontPID else { continue }
+        guard let layer = window[kCGWindowLayer as String] as? Int, layer <= 0 else { continue }
+        guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+              let x = bounds["X"] as? CGFloat,
+              let y = bounds["Y"] as? CGFloat,
+              let w = bounds["Width"] as? CGFloat,
+              let h = bounds["Height"] as? CGFloat else { continue }
+
+        let candidatePoints = [
+            CGPoint(x: x + w / 2, y: y + h / 2),
+            CGPoint(x: x + 1, y: y + 1),
+        ]
+        for point in candidatePoints {
+            var displayID: CGDirectDisplayID = 0
+            var count: UInt32 = 0
+            CGGetDisplaysWithPoint(point, 1, &displayID, &count)
+            if count > 0 { return displayID }
+        }
+
+        // Fullscreen fallback
+        let windowRect = CGRect(x: x, y: y, width: w, height: h)
+        var allDisplays = [CGDirectDisplayID](repeating: 0, count: 8)
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(8, &allDisplays, &displayCount)
+        for i in 0..<Int(displayCount) {
+            let displayBounds = CGDisplayBounds(allDisplays[i])
+            if abs(windowRect.width - displayBounds.width) < 10 && abs(windowRect.height - displayBounds.height) < 10 {
+                return allDisplays[i]
+            }
+        }
+    }
+
     return CGMainDisplayID()
 }
 
