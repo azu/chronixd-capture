@@ -254,28 +254,10 @@ struct Capture: AsyncParsableCommand {
                 // Flush transcription buffer
                 let segments = transcriptionBuffer.flush()
 
-                // Dedup check
-                if dedupEnabled, segments.isEmpty {
-                    if let focused = screenContext.displays.first(where: { $0.isFocused }) ?? screenContext.displays.first {
-                        let currentKey = DedupKey(
-                            app: focused.appName ?? "",
-                            title: focused.windowTitle ?? "",
-                            url: focused.url ?? ""
-                        )
-                        let ocrHash = sha256(focused.ocrText)
-                        if dedupState.isDuplicate(key: currentKey, ocrHash: ocrHash) {
-                            if isatty(STDERR_FILENO) != 0 {
-                                FileHandle.standardError.write(Data("[capture] Skipped (no change)\n".utf8))
-                            }
-                            continue
-                        }
-                    }
-                }
-
                 // Build records
                 var records: [any CaptureRecord] = []
 
-                // Screenshot records for each display (skip ignored apps/urls)
+                // Screenshot records for each display (skip ignored + per-display dedup)
                 for display in screenContext.displays {
                     if let ignoreAppPatterns, let appName = display.appName,
                        ignoreAppPatterns.contains(where: { appName.localizedCaseInsensitiveContains($0) }) {
@@ -288,6 +270,18 @@ struct Capture: AsyncParsableCommand {
                     if let ignoreUrlPatterns, let url = display.url,
                        ignoreUrlPatterns.contains(where: { url.localizedCaseInsensitiveContains($0) }) {
                         continue
+                    }
+                    // Per-display dedup
+                    if dedupEnabled {
+                        let displayKey = DedupKey(
+                            app: display.appName ?? "",
+                            title: display.windowTitle ?? "",
+                            url: display.url ?? ""
+                        )
+                        let ocrHash = sha256(display.ocrText)
+                        if dedupState.isDuplicate(displayID: display.displayID, key: displayKey, ocrHash: ocrHash) {
+                            continue
+                        }
                     }
                     let recordID = UUID().uuidString.prefix(12).lowercased()
                     if let path = display.screenshotPath {
@@ -431,17 +425,17 @@ private struct DedupKey: Equatable {
 
 private final class DedupState: @unchecked Sendable {
     private let lock = NSLock()
-    private var lastKey: DedupKey?
-    private var lastOCRHash: String?
+    private var lastKeys: [CGDirectDisplayID: DedupKey] = [:]
+    private var lastOCRHashes: [CGDirectDisplayID: String] = [:]
 
-    func isDuplicate(key: DedupKey, ocrHash: String) -> Bool {
+    func isDuplicate(displayID: CGDirectDisplayID, key: DedupKey, ocrHash: String) -> Bool {
         lock.lock()
         defer {
-            lastKey = key
-            lastOCRHash = ocrHash
+            lastKeys[displayID] = key
+            lastOCRHashes[displayID] = ocrHash
             lock.unlock()
         }
-        return lastKey == key && lastOCRHash == ocrHash
+        return lastKeys[displayID] == key && lastOCRHashes[displayID] == ocrHash
     }
 }
 
