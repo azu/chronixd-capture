@@ -120,7 +120,7 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
             "--model", model,
             "--no-session-persistence",
             "--disable-slash-commands",
-            "--dangerously-skip-permissions",
+            "--allowedTools", "Read",
             "--setting-sources", "",
             prompt,
         ]
