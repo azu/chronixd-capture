@@ -109,7 +109,9 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
             - Keep the speaker's intended meaning intact
             - Technical terms, proper nouns, and variable/function names should match what's visible on screen
             - Also analyze the screen and camera context to determine what the user is doing
-            - Respond in the same language as the user's speech for text, activity, and summary fields
+            - The "text" field must contain ONLY the corrected transcription. No explanations, tables, or markdown.
+            - The "activity" and "summary" fields describe the user's current situation
+            - Respond in the same language as the user's speech for all fields
 
             """
         if !previousSegments.isEmpty {
@@ -155,9 +157,7 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        let jsonSchema = """
-            {"type":"object","properties":{"text":{"type":"string","description":"Corrected transcription text"},"activity":{"type":"string","description":"What the user is doing (e.g. coding, cooking, reading, browsing, meeting)"},"summary":{"type":"string","description":"One-line summary of the current situation"}},"required":["text","activity","summary"]}
-            """
+        let jsonSchema = #"{"type":"object","properties":{"text":{"type":"string","description":"Corrected transcription text"},"activity":{"type":"string","description":"What the user is doing (e.g. coding, cooking, reading, browsing, meeting)"},"summary":{"type":"string","description":"One-line summary of the current situation"}},"required":["text","activity","summary"]}"#
         process.arguments = [
             "claude", "-p",
             "--output-format", "json",

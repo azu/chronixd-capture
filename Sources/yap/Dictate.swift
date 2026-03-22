@@ -706,8 +706,12 @@ final class MicrophoneCapture: @unchecked Sendable {
     nonisolated(unsafe) var onSpeechStart: (() -> Void)?
     /// RMS threshold for voice activity detection.
     private let vadThreshold: Float = 0.01
-    /// Was speaking in previous buffer?
-    nonisolated(unsafe) private var wasSpeaking: Bool = false
+    /// Number of consecutive silent buffers needed to consider speech ended.
+    private let silenceBuffersRequired = 10
+    /// Whether currently in a speech segment.
+    nonisolated(unsafe) private var inSpeech: Bool = false
+    /// Count of consecutive silent buffers.
+    nonisolated(unsafe) private var silentBufferCount: Int = 0
 
     func stop() {
         audioEngine.stop()
@@ -726,10 +730,12 @@ final class MicrophoneCapture: @unchecked Sendable {
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
         guard !isMuted else {
-            wasSpeaking = false
+            inSpeech = false
+            silentBufferCount = 0
             return
         }
         // Voice Activity Detection: detect silence → speech transition
+        // Only triggers once per speech segment (requires sustained silence to reset)
         if let channelData = buffer.floatChannelData {
             let frames = Int(buffer.frameLength)
             var sum: Float = 0
@@ -738,11 +744,18 @@ final class MicrophoneCapture: @unchecked Sendable {
                 sum += sample * sample
             }
             let rms = sqrt(sum / Float(max(frames, 1)))
-            let isSpeaking = rms > vadThreshold
-            if isSpeaking, !wasSpeaking {
-                onSpeechStart?()
+            if rms > vadThreshold {
+                silentBufferCount = 0
+                if !inSpeech {
+                    inSpeech = true
+                    onSpeechStart?()
+                }
+            } else {
+                silentBufferCount += 1
+                if silentBufferCount >= silenceBuffersRequired {
+                    inSpeech = false
+                }
             }
-            wasSpeaking = isSpeaking
         }
         let frameCapacity = AVAudioFrameCount(
             ceil(Double(buffer.frameLength) * targetFormat.sampleRate / converter.inputFormat.sampleRate)
