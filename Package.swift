@@ -6,7 +6,8 @@ let package = Package(
     name: "yap",
     platforms: [.macOS("26")],
     products: [
-        .executable(name: "yap", targets: ["yap"])
+        .executable(name: "yap", targets: ["yap"]),
+        .executable(name: "chronixd-capture", targets: ["chronixd-capture"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
@@ -24,6 +25,10 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
             ]
-        )
+        ),
+        .executableTarget(
+            name: "chronixd-capture",
+            dependencies: []
+        ),
     ]
 )
