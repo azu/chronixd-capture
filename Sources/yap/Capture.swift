@@ -215,6 +215,25 @@ struct Capture: AsyncParsableCommand {
         let ignoreTitlePatterns = ignoreTitles
         let ignoreUrlPatterns = ignoreUrls
 
+        // Background task: poll media playback state every 2 seconds
+        // Mutes mic when media is actively playing (NowPlaying playbackRate > 0)
+        let muteCaptureRef = capture
+        let mediaCheckTask = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let shouldMute = await AudioOutputDetector.isMediaPlaying()
+                if muteCaptureRef.isMuted != shouldMute {
+                    muteCaptureRef.isMuted = shouldMute
+                    if isatty(STDERR_FILENO) != 0 {
+                        let msg = shouldMute
+                            ? "[capture] Media playing, muting mic"
+                            : "[capture] Media stopped, unmuting mic"
+                        FileHandle.standardError.write(Data("\(msg)\n".utf8))
+                    }
+                }
+            }
+        }
+
         // Background task 1: consume transcriber results into buffer
         let consumeTask = Task.detached {
             do {
@@ -371,6 +390,7 @@ struct Capture: AsyncParsableCommand {
             }
             captureTimerTask.cancel()
             consumeTask.cancel()
+            mediaCheckTask.cancel()
             if isatty(STDERR_FILENO) != 0 {
                 FileHandle.standardError.write(Data("\nCapture stopped.\n".utf8))
             }
