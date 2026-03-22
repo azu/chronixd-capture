@@ -32,8 +32,14 @@ let defaultMediaAppNames = [
     "QuickTime Player", "TV", "Podcasts", "ポッドキャスト",
 ]
 
+struct CameraContext: Sendable {
+    let deviceID: String
+    let imagePath: String?
+}
+
 struct ScreenContext: Sendable {
     let displays: [DisplayContext]
+    let cameras: [CameraContext]
     let timestamp: Date
 }
 
@@ -54,7 +60,7 @@ final class ScreenContextCapture: Sendable {
         let windowsByDisplay = captureVisibleWindows()
         let focusedDisplayID = activeDisplayID()
         let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
-        return ScreenContext(displays: displays, timestamp: Date())
+        return ScreenContext(displays: displays, cameras: [], timestamp: Date())
     }
 
     /// Capture screen context with screenshots only, no OCR (for claude mode).
@@ -63,7 +69,7 @@ final class ScreenContextCapture: Sendable {
         let windowsByDisplay = captureVisibleWindows()
         let focusedDisplayID = activeDisplayID()
         let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
-        return ScreenContext(displays: displays, timestamp: Date())
+        return ScreenContext(displays: displays, cameras: [], timestamp: Date())
     }
 
     func isMediaTitle(_ title: String?) -> Bool {

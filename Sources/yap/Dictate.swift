@@ -252,7 +252,7 @@ struct Dictate: AsyncParsableCommand {
             }
 
             let emptyContext = ScreenContext(
-                displays: [], timestamp: Date()
+                displays: [], cameras: [], timestamp: Date()
             )
 
             // Timestamp of last unmute — results before this are stale (from pre-mute buffer)
