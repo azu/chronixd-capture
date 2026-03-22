@@ -321,9 +321,17 @@ struct Dictate: AsyncParsableCommand {
                 }
             }
             let contextCache = ContextCache(emptyContext)
-            // Background: screen capture only (every 2 seconds)
+            // Capture screen on speech start (VAD trigger) with 1.5s throttle
+            let (speechStream, speechContinuation) = AsyncStream.makeStream(of: Void.self)
+            capture.onSpeechStart = {
+                speechContinuation.yield()
+            }
             let contextCaptureTask = Task { @MainActor in
-                while !Task.isCancelled {
+                var lastCaptureTime = Date.distantPast
+                for await _ in speechStream {
+                    let now = Date()
+                    guard now.timeIntervalSince(lastCaptureTime) > 1.5 else { continue }
+                    lastCaptureTime = now
                     let captureStart = ContinuousClock.now
                     let captured: ScreenContext
                     if useScreenshots {
@@ -334,11 +342,10 @@ struct Dictate: AsyncParsableCommand {
                     contextCache.context = captured
                     if showDebug {
                         let elapsed = ContinuousClock.now - captureStart
-                        print("[context-aware] Background screen capture took \(elapsed)")
+                        print("[context-aware] Speech-triggered screen capture took \(elapsed)")
                         fflush(stdout)
                         logScreenContext(captured)
                     }
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
             }
 
@@ -695,6 +702,13 @@ final class MicrophoneCapture: @unchecked Sendable {
     /// When true, audio buffers are discarded (not sent to speech recognizer).
     nonisolated(unsafe) var isMuted: Bool = false
 
+    /// Called when voice activity starts (silence → speech transition).
+    nonisolated(unsafe) var onSpeechStart: (() -> Void)?
+    /// RMS threshold for voice activity detection.
+    private let vadThreshold: Float = 0.01
+    /// Was speaking in previous buffer?
+    nonisolated(unsafe) private var wasSpeaking: Bool = false
+
     func stop() {
         audioEngine.stop()
         inputContinuation.finish()
@@ -711,7 +725,25 @@ final class MicrophoneCapture: @unchecked Sendable {
     // MARK: Private
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard !isMuted else { return }
+        guard !isMuted else {
+            wasSpeaking = false
+            return
+        }
+        // Voice Activity Detection: detect silence → speech transition
+        if let channelData = buffer.floatChannelData {
+            let frames = Int(buffer.frameLength)
+            var sum: Float = 0
+            for i in 0..<frames {
+                let sample = channelData[0][i]
+                sum += sample * sample
+            }
+            let rms = sqrt(sum / Float(max(frames, 1)))
+            let isSpeaking = rms > vadThreshold
+            if isSpeaking, !wasSpeaking {
+                onSpeechStart?()
+            }
+            wasSpeaking = isSpeaking
+        }
         let frameCapacity = AVAudioFrameCount(
             ceil(Double(buffer.frameLength) * targetFormat.sampleRate / converter.inputFormat.sampleRate)
         )
