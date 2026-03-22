@@ -61,10 +61,10 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
             let corrected = response.trimmingCharacters(in: .whitespacesAndNewlines)
             let status: CorrectionStatus = corrected == text ? .unchanged : .corrected
             addToHistory(corrected)
-            return CorrectionResult(original: text, corrected: corrected, status: status)
+            return CorrectionResult(original: text, corrected: corrected, status: status, activity: nil, summary: nil)
         } catch {
             addToHistory(text)
-            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
+            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription), activity: nil, summary: nil)
         }
     }
 

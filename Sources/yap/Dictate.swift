@@ -29,6 +29,8 @@ struct CorrectionResult: Sendable {
     let original: String
     let corrected: String
     let status: CorrectionStatus
+    let activity: String?
+    let summary: String?
 }
 
 protocol Corrector: Sendable {
@@ -537,7 +539,7 @@ struct Dictate: AsyncParsableCommand {
                                     print("[context-aware] Too short (\(text.count) chars), skipping correction")
                                     fflush(stdout)
                                 }
-                                correction = CorrectionResult(original: text, corrected: text, status: .unchanged)
+                                correction = CorrectionResult(original: text, corrected: text, status: .unchanged, activity: nil, summary: nil)
                             } else {
                                 let correctionStart = ContinuousClock.now
                                 correction = await corrector.correct(text: text, context: currentContext)
@@ -556,7 +558,9 @@ struct Dictate: AsyncParsableCommand {
                                 timeRange: timeRange,
                                 original: correction.original,
                                 corrected: correction.corrected,
-                                words: words
+                                words: words,
+                                activity: correction.activity,
+                                summary: correction.summary
                             ), terminator: "")
                             fflush(stdout)
                         }
