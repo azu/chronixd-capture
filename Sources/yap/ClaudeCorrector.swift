@@ -103,6 +103,13 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
             }
             prompt += "\n"
         }
+        for camera in context.cameras {
+            prompt += "### Camera\n"
+            if let path = camera.imagePath {
+                prompt += "Photo (read this file): \(path)\n"
+            }
+            prompt += "\n"
+        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
