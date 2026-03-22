@@ -706,12 +706,12 @@ final class MicrophoneCapture: @unchecked Sendable {
     nonisolated(unsafe) var onSpeechStart: (() -> Void)?
     /// RMS threshold for voice activity detection.
     private let vadThreshold: Float = 0.01
-    /// Number of consecutive silent buffers needed to consider speech ended.
-    private let silenceBuffersRequired = 10
+    /// Silence duration (seconds) needed to consider speech ended.
+    private let silenceDuration: TimeInterval = 0.3
     /// Whether currently in a speech segment.
     nonisolated(unsafe) private var inSpeech: Bool = false
-    /// Count of consecutive silent buffers.
-    nonisolated(unsafe) private var silentBufferCount: Int = 0
+    /// Timestamp when silence started.
+    nonisolated(unsafe) private var silenceStartTime: Date?
 
     func stop() {
         audioEngine.stop()
@@ -731,7 +731,7 @@ final class MicrophoneCapture: @unchecked Sendable {
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
         guard !isMuted else {
             inSpeech = false
-            silentBufferCount = 0
+            silenceStartTime = nil
             return
         }
         // Voice Activity Detection: detect silence → speech transition
@@ -745,14 +745,15 @@ final class MicrophoneCapture: @unchecked Sendable {
             }
             let rms = sqrt(sum / Float(max(frames, 1)))
             if rms > vadThreshold {
-                silentBufferCount = 0
+                silenceStartTime = nil
                 if !inSpeech {
                     inSpeech = true
                     onSpeechStart?()
                 }
             } else {
-                silentBufferCount += 1
-                if silentBufferCount >= silenceBuffersRequired {
+                if silenceStartTime == nil {
+                    silenceStartTime = Date()
+                } else if let start = silenceStartTime, Date().timeIntervalSince(start) >= silenceDuration {
                     inSpeech = false
                 }
             }
