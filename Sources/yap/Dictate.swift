@@ -338,6 +338,19 @@ struct Dictate: AsyncParsableCommand {
 
             // Background context capture: pre-capture screen + camera every 2 seconds
             // so the context is already available when a transcription result arrives.
+            final class ExplainState: @unchecked Sendable {
+                private let lock = NSLock()
+                private var _lastTime = Date.distantPast
+                private var _inFlight = false
+                var lastTime: Date {
+                    get { lock.lock(); defer { lock.unlock() }; return _lastTime }
+                    set { lock.lock(); _lastTime = newValue; lock.unlock() }
+                }
+                var inFlight: Bool {
+                    get { lock.lock(); defer { lock.unlock() }; return _inFlight }
+                    set { lock.lock(); _inFlight = newValue; lock.unlock() }
+                }
+            }
             final class ContextCache: @unchecked Sendable {
                 private let lock = NSLock()
                 private var _context: ScreenContext
@@ -377,6 +390,7 @@ struct Dictate: AsyncParsableCommand {
             }
 
             if format == .txt {
+                let explainState = ExplainState()
                 for try await result in transcriber.results {
                     let now = Date()
                     let screenContext = contextCache.context
@@ -488,21 +502,22 @@ struct Dictate: AsyncParsableCommand {
                         print(correction.corrected)
                         fflush(stdout)
                         // Parallel context explanation
-                        if let explainer {
-                            let ctx = correctionContext
-                            nonisolated(unsafe) var lastExplainTime = Date.distantPast
-                            let interval = explainInterval
-                            Task.detached {
-                                let now = Date()
-                                guard now.timeIntervalSince(lastExplainTime) >= interval else { return }
-                                lastExplainTime = now
-                                if let explanation = await explainer.explain(context: ctx, locale: currentLocale) {
-                                    if format == .ndjson {
-                                        print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
-                                    } else {
-                                        print("activity: \(explanation.activity) / summary: \(explanation.summary)")
+                        if let explainer, !explainState.inFlight {
+                            let now = Date()
+                            if now.timeIntervalSince(explainState.lastTime) >= explainInterval {
+                                explainState.lastTime = now
+                                explainState.inFlight = true
+                                let ctx = correctionContext
+                                Task.detached {
+                                    defer { explainState.inFlight = false }
+                                    if let explanation = await explainer.explain(context: ctx, locale: currentLocale) {
+                                        if format == .ndjson {
+                                            print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
+                                        } else {
+                                            print("activity: \(explanation.activity) / summary: \(explanation.summary)")
+                                        }
+                                        fflush(stdout)
                                     }
-                                    fflush(stdout)
                                 }
                             }
                         }
@@ -516,6 +531,7 @@ struct Dictate: AsyncParsableCommand {
                 }
                 let includeWords = wordTimestamps
                 var segmentIndex = 0
+                let explainState2 = ExplainState()
 
                 for try await result in transcriber.results {
                     let currentContext = contextCache.context
@@ -620,16 +636,22 @@ struct Dictate: AsyncParsableCommand {
                             ), terminator: "")
                             fflush(stdout)
                             // Parallel context explanation
-                            if let explainer {
-                                let ctx = currentContext
-                                Task.detached {
-                                    if let explanation = await explainer.explain(context: ctx, locale: currentLocale) {
-                                        if format == .ndjson {
-                                            print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
-                                        } else {
-                                            print("activity: \(explanation.activity) / summary: \(explanation.summary)")
+                            if let explainer, !explainState2.inFlight {
+                                let now2 = Date()
+                                if now2.timeIntervalSince(explainState2.lastTime) >= explainInterval {
+                                    explainState2.lastTime = now2
+                                    explainState2.inFlight = true
+                                    let ctx = currentContext
+                                    Task.detached {
+                                        defer { explainState2.inFlight = false }
+                                        if let explanation = await explainer.explain(context: ctx, locale: currentLocale) {
+                                            if format == .ndjson {
+                                                print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
+                                            } else {
+                                                print("activity: \(explanation.activity) / summary: \(explanation.summary)")
+                                            }
+                                            fflush(stdout)
                                         }
-                                        fflush(stdout)
                                     }
                                 }
                             }
