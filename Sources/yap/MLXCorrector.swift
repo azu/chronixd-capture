@@ -94,18 +94,30 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
             }
         }
 
-        let text = textLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = textLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip common LLM artifacts: quotes, labels, markdown
+        text = text.replacingOccurrences(of: "「", with: "").replacingOccurrences(of: "」", with: "")
+        if let range = text.range(of: #"^(修正|corrected|fixed|transcription|書き起こし).*[:：]\s*"#, options: [.regularExpression, .caseInsensitive]) {
+            text = String(text[range.upperBound...])
+        }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ParsedResponse(text: text, activity: activity, summary: summary)
     }
 
     private func buildPrompt(text: String, context: ScreenContext) -> String {
         var prompt = """
-            Fix this voice transcription using the screenshots and camera photos. \
-            Fix misrecognized words, add punctuation, remove fillers. \
-            Output the corrected text, then on separate lines: \
-            ACTIVITY: what the user is doing (e.g. coding, reading, cooking) \
-            SUMMARY: one-line situation summary \
-            Respond in the same language as the user's speech.
+            You fix voice transcriptions. Rules:
+            1. Fix misrecognized words using screenshots/camera, add punctuation, remove fillers
+            2. Output EXACTLY 3 lines, nothing else:
+            Line 1: corrected text only (no quotes, no labels, no explanations)
+            Line 2: ACTIVITY: what user is doing
+            Line 3: SUMMARY: one-line situation summary
+            Use the same language as the transcription.
+
+            Example output:
+            今日はカレーを作ります。
+            ACTIVITY: cooking
+            SUMMARY: キッチンでカレーの準備中
 
             """
 
