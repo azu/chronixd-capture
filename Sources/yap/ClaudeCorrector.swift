@@ -19,7 +19,6 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
         let now = Date()
         lock.lock()
         history.append((text: text, timestamp: now))
-        // Remove entries older than context window
         let cutoff = now.addingTimeInterval(-Self.contextWindowSeconds)
         history.removeAll { $0.timestamp < cutoff }
         lock.unlock()
@@ -39,52 +38,21 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
             let raw = try await withTimeout(seconds: Self.timeoutSeconds) {
                 try await self.runClaude(text: text, context: context, previousSegments: recentHistory)
             }
-            let parsed = Self.parseResponse(raw)
-            let correctedText = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if correctedText.isEmpty {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
                 addToHistory(text)
-                return CorrectionResult(original: text, corrected: text, status: .error("empty response"), activity: nil, summary: nil)
+                return CorrectionResult(original: text, corrected: text, status: .error("empty response"))
             }
-            let status: CorrectionStatus = correctedText == text ? .unchanged : .corrected
-            addToHistory(correctedText)
-            return CorrectionResult(original: text, corrected: correctedText, status: status, activity: parsed.activity, summary: parsed.summary)
+            let status: CorrectionStatus = trimmed == text ? .unchanged : .corrected
+            addToHistory(trimmed)
+            return CorrectionResult(original: text, corrected: trimmed, status: status)
         } catch is CancellationError {
             addToHistory(text)
-            return CorrectionResult(original: text, corrected: text, status: .timeout, activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: text, status: .timeout)
         } catch {
             addToHistory(text)
-            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription), activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
         }
-    }
-
-    private struct ParsedResponse {
-        let text: String
-        let activity: String?
-        let summary: String?
-    }
-
-    /// Parse JSON response from claude -p --output-format json --json-schema.
-    /// The structured output is in the "structured_output" field, not "result".
-    private static func parseResponse(_ raw: String) -> ParsedResponse {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = trimmed.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ParsedResponse(text: trimmed, activity: nil, summary: nil)
-        }
-        // --json-schema puts structured output in "structured_output" field
-        if let structured = json["structured_output"] as? [String: Any],
-           let text = structured["text"] as? String {
-            return ParsedResponse(
-                text: text,
-                activity: structured["activity"] as? String,
-                summary: structured["summary"] as? String
-            )
-        }
-        // Fallback: try "result" field as plain text
-        if let result = json["result"] as? String, !result.isEmpty {
-            return ParsedResponse(text: result, activity: nil, summary: nil)
-        }
-        return ParsedResponse(text: trimmed, activity: nil, summary: nil)
     }
 
     private func runClaude(text: String, context: ScreenContext, previousSegments: [String]) async throws -> String {
@@ -99,10 +67,7 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
             - Fix false starts and stutters into clean sentences
             - Keep the speaker's intended meaning intact
             - Technical terms, proper nouns, and variable/function names should match what's visible on screen
-            - Also analyze the screen and camera context to determine what the user is doing
-            - The "text" field must contain ONLY the corrected transcription. No explanations, tables, or markdown.
-            - The "activity" and "summary" fields describe the user's current situation
-            - Respond in the same language as the user's speech for all fields
+            - Output ONLY the corrected text. No explanations, no quotes, no prefixes.
 
             """
         if !previousSegments.isEmpty {
@@ -148,11 +113,9 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        let jsonSchema = #"{"type":"object","properties":{"text":{"type":"string","description":"Corrected transcription text"},"activity":{"type":"string","description":"What the user is doing (e.g. coding, cooking, reading, browsing, meeting)"},"summary":{"type":"string","description":"One-line summary of the current situation"}},"required":["text","activity","summary"]}"#
         process.arguments = [
             "claude", "-p",
-            "--output-format", "json",
-            "--json-schema", jsonSchema,
+            "--output-format", "text",
             "--model", model,
             "--no-session-persistence",
             "--disable-slash-commands",

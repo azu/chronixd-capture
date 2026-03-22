@@ -29,8 +29,6 @@ struct CorrectionResult: Sendable {
     let original: String
     let corrected: String
     let status: CorrectionStatus
-    let activity: String?
-    let summary: String?
 }
 
 protocol Corrector: Sendable {
@@ -102,6 +100,16 @@ struct Dictate: AsyncParsableCommand {
         name: .long,
         help: "Minimum text length (in characters) to trigger LLM correction. Shorter texts are output as-is. Default: 5."
     ) var minCorrectionLength: Int = 5
+
+    @Option(
+        name: .long,
+        help: "Context explanation backend (runs in parallel with correction). Values: claude, mlx."
+    ) var contextExplain: CorrectorBackend? = nil
+
+    @Option(
+        name: .long,
+        help: "Minimum interval (seconds) between context explanations. 0 = every correction. Default: 0."
+    ) var contextExplainInterval: TimeInterval = 0
 
     @MainActor mutating func run() async throws {
         guard SpeechTranscriber.isAvailable else {
@@ -276,6 +284,24 @@ struct Dictate: AsyncParsableCommand {
                 }
                 try await mlxCorrector.loadModelIfNeeded()
             }
+
+            // Context explainer (runs in parallel with correction)
+            let explainer: (any ContextExplainer)? = if let explainBackend = contextExplain {
+                switch explainBackend {
+                case .claude: ClaudeContextExplainer(model: claudeModel) as any ContextExplainer
+                case .mlx: MLXContextExplainer(modelID: mlxModel) as any ContextExplainer
+                case .local: nil as (any ContextExplainer)?
+                }
+            } else {
+                nil as (any ContextExplainer)?
+            }
+            if let mlxExplainer = explainer as? MLXContextExplainer {
+                if isatty(STDERR_FILENO) != 0 {
+                    FileHandle.standardError.write(Data("Loading MLX explainer model…\n".utf8))
+                }
+                try await mlxExplainer.loadModelIfNeeded()
+            }
+            let explainInterval = contextExplainInterval
 
             let emptyContext = ScreenContext(
                 displays: [], cameras: [], timestamp: Date()
@@ -459,10 +485,26 @@ struct Dictate: AsyncParsableCommand {
                             fflush(stdout)
                         }
                         print(correction.corrected)
-                        if let activity = correction.activity, let summary = correction.summary {
-                            print("activity: \(activity) / summary: \(summary)")
-                        }
                         fflush(stdout)
+                        // Parallel context explanation
+                        if let explainer {
+                            let ctx = correctionContext
+                            nonisolated(unsafe) var lastExplainTime = Date.distantPast
+                            let interval = explainInterval
+                            Task.detached {
+                                let now = Date()
+                                guard now.timeIntervalSince(lastExplainTime) >= interval else { return }
+                                lastExplainTime = now
+                                if let explanation = await explainer.explain(context: ctx) {
+                                    if format == .ndjson {
+                                        print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
+                                    } else {
+                                        print("activity: \(explanation.activity) / summary: \(explanation.summary)")
+                                    }
+                                    fflush(stdout)
+                                }
+                            }
+                        }
                     }
                 }
                 mediaCheckTask.cancel()
@@ -508,7 +550,7 @@ struct Dictate: AsyncParsableCommand {
                                     print("[context-aware] Too short (\(text.count) chars), skipping correction")
                                     fflush(stdout)
                                 }
-                                correction = CorrectionResult(original: text, corrected: text, status: .unchanged, activity: nil, summary: nil)
+                                correction = CorrectionResult(original: text, corrected: text, status: .unchanged)
                             } else {
                                 // Camera capture on demand
                                 var correctionContext = currentContext
@@ -573,11 +615,23 @@ struct Dictate: AsyncParsableCommand {
                                 timeRange: timeRange,
                                 original: correction.original,
                                 corrected: correction.corrected,
-                                words: words,
-                                activity: correction.activity,
-                                summary: correction.summary
+                                words: words
                             ), terminator: "")
                             fflush(stdout)
+                            // Parallel context explanation
+                            if let explainer {
+                                let ctx = currentContext
+                                Task.detached {
+                                    if let explanation = await explainer.explain(context: ctx) {
+                                        if format == .ndjson {
+                                            print(OutputFormat.formatContextExplanation(activity: explanation.activity, summary: explanation.summary))
+                                        } else {
+                                            print("activity: \(explanation.activity) / summary: \(explanation.summary)")
+                                        }
+                                        fflush(stdout)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

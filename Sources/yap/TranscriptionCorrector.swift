@@ -36,11 +36,11 @@ actor TranscriptionCorrector: Corrector {
                 try await self.performCorrection(text: text, context: context)
             }
             let status: CorrectionStatus = corrected == text ? .unchanged : .corrected
-            return CorrectionResult(original: text, corrected: corrected, status: status, activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: corrected, status: status)
         } catch is CancellationError {
-            return CorrectionResult(original: text, corrected: text, status: .timeout, activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: text, status: .timeout)
         } catch {
-            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription), activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
         }
     }
 

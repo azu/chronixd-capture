@@ -57,67 +57,21 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
                 response = try await session.respond(to: prompt, images: images, videos: [])
             }
 
-
-            let parsed = Self.parseResponse(response)
-            let corrected = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let corrected = response.trimmingCharacters(in: .whitespacesAndNewlines)
             let status: CorrectionStatus = corrected == text ? .unchanged : .corrected
             addToHistory(corrected)
-            return CorrectionResult(original: text, corrected: corrected, status: status, activity: parsed.activity, summary: parsed.summary)
+            return CorrectionResult(original: text, corrected: corrected, status: status)
         } catch {
             addToHistory(text)
-            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription), activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription))
         }
-    }
-
-    private struct ParsedResponse {
-        let text: String
-        let activity: String?
-        let summary: String?
-    }
-
-    /// Parse response in "text\nACTIVITY: ...\nSUMMARY: ..." format.
-    private static func parseResponse(_ raw: String) -> ParsedResponse {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lines = trimmed.components(separatedBy: "\n")
-
-        var textLines: [String] = []
-        var activity: String?
-        var summary: String?
-
-        for line in lines {
-            if line.hasPrefix("ACTIVITY:") {
-                activity = line.replacingOccurrences(of: "ACTIVITY:", with: "").trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("SUMMARY:") {
-                summary = line.replacingOccurrences(of: "SUMMARY:", with: "").trimmingCharacters(in: .whitespaces)
-            } else {
-                textLines.append(line)
-            }
-        }
-
-        var text = textLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip common LLM artifacts: quotes, labels, markdown
-        text = text.replacingOccurrences(of: "「", with: "").replacingOccurrences(of: "」", with: "")
-        if let range = text.range(of: #"^(修正|corrected|fixed|transcription|書き起こし).*[:：]\s*"#, options: [.regularExpression, .caseInsensitive]) {
-            text = String(text[range.upperBound...])
-        }
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ParsedResponse(text: text, activity: activity, summary: summary)
     }
 
     private func buildPrompt(text: String, context: ScreenContext) -> String {
         var prompt = """
-            You fix voice transcriptions. Rules:
-            1. Fix misrecognized words using screenshots/camera, add punctuation, remove fillers
-            2. Output EXACTLY 3 lines, nothing else:
-            Line 1: corrected text only (no quotes, no labels, no explanations)
-            Line 2: ACTIVITY: what user is doing
-            Line 3: SUMMARY: one-line situation summary
-            Use the same language as the transcription.
-
-            Example output:
-            今日はカレーを作ります。
-            ACTIVITY: cooking
-            SUMMARY: キッチンでカレーの準備中
+            Fix this voice transcription using the screenshots and camera photos. \
+            Fix misrecognized words, add punctuation, remove fillers. \
+            Output ONLY the corrected text. No quotes, no brackets, no explanations.
 
             """
 

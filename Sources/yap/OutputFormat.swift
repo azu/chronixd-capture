@@ -137,9 +137,7 @@ enum OutputFormat: String, EnumerableFlag {
         original: String,
         corrected: String,
         speaker: String? = nil,
-        words: [(text: String, timeRange: CMTimeRange)]? = nil,
-        activity: String? = nil,
-        summary: String? = nil
+        words: [(text: String, timeRange: CMTimeRange)]? = nil
     ) -> String {
         let correctionApplied = original != corrected
         switch self {
@@ -189,19 +187,32 @@ enum OutputFormat: String, EnumerableFlag {
             return "    {}"
         case .ndjson:
             var dict: [String: Any] = [
+                "type": "transcription",
                 "start": Self.jsonTime(timeRange.start.seconds),
                 "end": Self.jsonTime(timeRange.end.seconds),
                 "text": corrected,
             ]
             if let speaker { dict["speaker"] = speaker }
-            if let activity { dict["activity"] = activity }
-            if let summary { dict["summary"] = summary }
             if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
                let str = String(data: data, encoding: .utf8) {
                 return str
             }
             return "{}"
         }
+    }
+
+    /// Format a context explanation as NDJSON.
+    static func formatContextExplanation(activity: String, summary: String) -> String {
+        let dict: [String: Any] = [
+            "type": "context",
+            "activity": activity,
+            "summary": summary,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "{}"
     }
 
     // MARK: Buffered API (used by transcribe command)
