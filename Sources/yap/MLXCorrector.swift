@@ -58,21 +58,54 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
             }
 
 
-            let corrected = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsed = Self.parseResponse(response)
+            let corrected = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
             let status: CorrectionStatus = corrected == text ? .unchanged : .corrected
             addToHistory(corrected)
-            return CorrectionResult(original: text, corrected: corrected, status: status, activity: nil, summary: nil)
+            return CorrectionResult(original: text, corrected: corrected, status: status, activity: parsed.activity, summary: parsed.summary)
         } catch {
             addToHistory(text)
             return CorrectionResult(original: text, corrected: text, status: .error(error.localizedDescription), activity: nil, summary: nil)
         }
     }
 
+    private struct ParsedResponse {
+        let text: String
+        let activity: String?
+        let summary: String?
+    }
+
+    /// Parse response in "text\nACTIVITY: ...\nSUMMARY: ..." format.
+    private static func parseResponse(_ raw: String) -> ParsedResponse {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = trimmed.components(separatedBy: "\n")
+
+        var textLines: [String] = []
+        var activity: String?
+        var summary: String?
+
+        for line in lines {
+            if line.hasPrefix("ACTIVITY:") {
+                activity = line.replacingOccurrences(of: "ACTIVITY:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("SUMMARY:") {
+                summary = line.replacingOccurrences(of: "SUMMARY:", with: "").trimmingCharacters(in: .whitespaces)
+            } else {
+                textLines.append(line)
+            }
+        }
+
+        let text = textLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return ParsedResponse(text: text, activity: activity, summary: summary)
+    }
+
     private func buildPrompt(text: String, context: ScreenContext) -> String {
         var prompt = """
-            Fix this voice transcription using the screenshots. \
+            Fix this voice transcription using the screenshots and camera photos. \
             Fix misrecognized words, add punctuation, remove fillers. \
-            Output ONLY the corrected text. No quotes, no brackets, no explanations.
+            Output the corrected text, then on separate lines: \
+            ACTIVITY: what the user is doing (e.g. coding, reading, cooking) \
+            SUMMARY: one-line situation summary \
+            Respond in the same language as the user's speech.
 
             """
 
