@@ -278,7 +278,7 @@ struct Dictate: AsyncParsableCommand {
 
             // Background task: poll media playback state every 2 seconds
             // Mutes mic when any media is actively playing (NowPlaying playbackRate > 0)
-            nonisolated(unsafe) let muteCaptureRef = capture
+            let muteCaptureRef = capture
             let mediaCheckDebug = showDebug
             let mediaCheckTask = Task.detached {
                 while !Task.isCancelled {
