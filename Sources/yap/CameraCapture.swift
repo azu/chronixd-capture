@@ -8,6 +8,12 @@ import CoreMedia
 final class CameraCapture: NSObject, @unchecked Sendable {
     private let devices: [(device: AVCaptureDevice, deviceID: String)]
     private let ciContext = CIContext()
+    private let lock = NSLock()
+    private var stopped = false
+    /// Active sessions that can be stopped on cancellation.
+    private var activeSessions: [AVCaptureSession] = []
+    /// Active once guards to force-resume continuations on stop.
+    private var activeGuards: [(guard: OnceGuard, continuation: CheckedContinuation<CGImage?, Never>)] = []
 
     /// Initialize with device IDs. Validates that all devices exist but does NOT start sessions.
     init(deviceIDs: [String]) throws {
@@ -28,10 +34,17 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         super.init()
     }
 
+    private var isStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
     /// Capture a snapshot from all configured cameras.
-    /// Starts a session per camera, grabs one frame, then stops.
     func captureAll() async -> [(deviceID: String, image: CGImage)] {
-        await withTaskGroup(of: (String, CGImage?).self) { group in
+        if isStopped { return [] }
+
+        return await withTaskGroup(of: (String, CGImage?).self) { group in
             for (device, id) in devices {
                 group.addTask {
                     let image = await self.captureFrame(from: device)
@@ -63,10 +76,15 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         guard session.canAddOutput(output) else { return nil }
         session.addOutput(output)
 
-        // Guard to ensure continuation is resumed exactly once
         let once = OnceGuard()
 
-        return await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
+        // Check if already stopped
+        if isStopped { return nil }
+        registerSession(session)
+
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
+            self.registerGuard(once, continuation: continuation)
+
             let delegate = WarmupFrameDelegate(ciContext: self.ciContext) { cgImage in
                 session.stopRunning()
                 if once.claim() {
@@ -85,10 +103,51 @@ final class CameraCapture: NSObject, @unchecked Sendable {
                 }
             }
         }
+
+        // Cleanup
+        unregister(session: session, guard: once)
+
+        return result
     }
 
-    /// No-op for API compatibility. Sessions are not persistent.
-    func stop() {}
+    private func registerSession(_ session: AVCaptureSession) {
+        lock.lock()
+        activeSessions.append(session)
+        lock.unlock()
+    }
+
+    private func registerGuard(_ g: OnceGuard, continuation: CheckedContinuation<CGImage?, Never>) {
+        lock.lock()
+        activeGuards.append((guard: g, continuation: continuation))
+        lock.unlock()
+    }
+
+    private func unregister(session: AVCaptureSession, guard g: OnceGuard) {
+        lock.lock()
+        activeSessions.removeAll { $0 === session }
+        activeGuards.removeAll { $0.guard === g }
+        lock.unlock()
+    }
+
+    /// Stop all active captures and prevent new ones.
+    func stop() {
+        lock.lock()
+        stopped = true
+        let sessions = activeSessions
+        let guards = activeGuards
+        activeSessions.removeAll()
+        activeGuards.removeAll()
+        lock.unlock()
+
+        for session in sessions {
+            session.stopRunning()
+        }
+        for (g, continuation) in guards {
+            if g.claim() {
+                continuation.resume(returning: nil)
+            }
+        }
+    }
 }
 
 // MARK: - WarmupFrameDelegate
@@ -191,7 +250,7 @@ private final class WarmupFrameDelegate: NSObject, AVCaptureVideoDataOutputSampl
 // MARK: - OnceGuard
 
 /// Ensures a block runs at most once (thread-safe).
-private final class OnceGuard: @unchecked Sendable {
+private final class OnceGuard: NSObject, @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
 
