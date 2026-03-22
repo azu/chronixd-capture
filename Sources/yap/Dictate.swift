@@ -96,6 +96,11 @@ struct Dictate: AsyncParsableCommand {
         help: "Camera device ID to capture. Use 'yap cameras' to list available devices. Can be specified multiple times."
     ) var camera: [String] = []
 
+    @Option(
+        name: .long,
+        help: "Minimum text length (in characters) to trigger LLM correction. Shorter texts are output as-is. Default: 5."
+    ) var minCorrectionLength: Int = 5
+
     @MainActor mutating func run() async throws {
         guard SpeechTranscriber.isAvailable else {
             throw Transcribe.Error.speechTranscriberNotAvailable
@@ -247,6 +252,7 @@ struct Dictate: AsyncParsableCommand {
         let sentenceMaxLength = maxLength
         let backend = contextAware
         let showDebug = debug
+        let minCorrLength = minCorrectionLength
 
         if let backend {
             let screenCapture = if let ignoreTitles {
@@ -392,6 +398,16 @@ struct Dictate: AsyncParsableCommand {
                             print("[context-aware] Raw: \(text)")
                             fflush(stdout)
                         }
+                        // Skip LLM correction for short texts
+                        if text.count < minCorrLength {
+                            if showDebug {
+                                print("[context-aware] Too short (\(text.count) chars), skipping correction")
+                                fflush(stdout)
+                            }
+                            print(text)
+                            fflush(stdout)
+                            continue
+                        }
                         let correctionStart = ContinuousClock.now
                         let correction = await corrector.correct(text: text, context: screenContext)
                         if showDebug {
@@ -514,12 +530,22 @@ struct Dictate: AsyncParsableCommand {
                                 print("[context-aware] Raw: \(text)")
                                 fflush(stdout)
                             }
-                            let correctionStart = ContinuousClock.now
-                            let correction = await corrector.correct(text: text, context: currentContext)
-                            if showDebug {
-                                let elapsed = ContinuousClock.now - correctionStart
-                                print("[context-aware] Correction took \(elapsed)")
-                                fflush(stdout)
+                            // Skip LLM correction for short texts
+                            let correction: CorrectionResult
+                            if text.count < minCorrLength {
+                                if showDebug {
+                                    print("[context-aware] Too short (\(text.count) chars), skipping correction")
+                                    fflush(stdout)
+                                }
+                                correction = CorrectionResult(original: text, corrected: text, status: .unchanged)
+                            } else {
+                                let correctionStart = ContinuousClock.now
+                                correction = await corrector.correct(text: text, context: currentContext)
+                                if showDebug {
+                                    let elapsed = ContinuousClock.now - correctionStart
+                                    print("[context-aware] Correction took \(elapsed)")
+                                    fflush(stdout)
+                                }
                             }
                             if segmentIndex > 0, let sep = format.segmentSeparator {
                                 print(sep, terminator: "")
