@@ -321,63 +321,20 @@ struct Dictate: AsyncParsableCommand {
                 }
             }
             let contextCache = ContextCache(emptyContext)
+            // Background: screen capture only (every 2 seconds)
             let contextCaptureTask = Task { @MainActor in
                 while !Task.isCancelled {
                     let captureStart = ContinuousClock.now
-                    var captured: ScreenContext
+                    let captured: ScreenContext
                     if useScreenshots {
                         captured = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
                     } else {
                         captured = (try? await screenCapture.capture()) ?? emptyContext
                     }
-                    if let cameraCapture = cameraCapture {
-                        let cameraImages = await cameraCapture.captureAll()
-                        let dir = captured.displays.first?.screenshotPath
-                            .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
-                            ?? NSTemporaryDirectory() + "yap/"
-                        var cameraContexts: [CameraContext] = []
-                        for (index, cam) in cameraImages.enumerated() {
-                            let path = dir + "/camera-\(index).png"
-                            if let dest = CGImageDestinationCreateWithURL(
-                                URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil
-                            ) {
-                                let scale = min(1.0, 1280.0 / Double(cam.image.width))
-                                let newWidth = Int(Double(cam.image.width) * scale)
-                                let newHeight = Int(Double(cam.image.height) * scale)
-                                let colorSpace = cam.image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
-                                if let ctx = CGContext(
-                                    data: nil, width: newWidth, height: newHeight,
-                                    bitsPerComponent: cam.image.bitsPerComponent,
-                                    bytesPerRow: 0, space: colorSpace,
-                                    bitmapInfo: cam.image.alphaInfo.rawValue
-                                ) {
-                                    ctx.interpolationQuality = .high
-                                    ctx.draw(cam.image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
-                                    if let resized = ctx.makeImage() {
-                                        CGImageDestinationAddImage(dest, resized, nil)
-                                    } else {
-                                        CGImageDestinationAddImage(dest, cam.image, nil)
-                                    }
-                                } else {
-                                    CGImageDestinationAddImage(dest, cam.image, nil)
-                                }
-                                if CGImageDestinationFinalize(dest) {
-                                    cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: path))
-                                } else {
-                                    cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: nil))
-                                }
-                            }
-                        }
-                        captured = ScreenContext(
-                            displays: captured.displays,
-                            cameras: cameraContexts,
-                            timestamp: captured.timestamp
-                        )
-                    }
                     contextCache.context = captured
                     if showDebug {
                         let elapsed = ContinuousClock.now - captureStart
-                        print("[context-aware] Background capture took \(elapsed)")
+                        print("[context-aware] Background screen capture took \(elapsed)")
                         fflush(stdout)
                         logScreenContext(captured)
                     }
@@ -421,8 +378,54 @@ struct Dictate: AsyncParsableCommand {
                             fflush(stdout)
                             continue
                         }
+                        // Camera capture on demand (only at correction time)
+                        var correctionContext = screenContext
+                        if let cameraCapture = cameraCapture {
+                            let cameraImages = await cameraCapture.captureAll()
+                            let dir = correctionContext.displays.first?.screenshotPath
+                                .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
+                                ?? NSTemporaryDirectory() + "yap/"
+                            var cameraContexts: [CameraContext] = []
+                            for (index, cam) in cameraImages.enumerated() {
+                                let path = dir + "/camera-\(index).png"
+                                if let dest = CGImageDestinationCreateWithURL(
+                                    URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil
+                                ) {
+                                    let scale = min(1.0, 1280.0 / Double(cam.image.width))
+                                    let newWidth = Int(Double(cam.image.width) * scale)
+                                    let newHeight = Int(Double(cam.image.height) * scale)
+                                    let colorSpace = cam.image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
+                                    if let ctx = CGContext(
+                                        data: nil, width: newWidth, height: newHeight,
+                                        bitsPerComponent: cam.image.bitsPerComponent,
+                                        bytesPerRow: 0, space: colorSpace,
+                                        bitmapInfo: cam.image.alphaInfo.rawValue
+                                    ) {
+                                        ctx.interpolationQuality = .high
+                                        ctx.draw(cam.image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
+                                        if let resized = ctx.makeImage() {
+                                            CGImageDestinationAddImage(dest, resized, nil)
+                                        } else {
+                                            CGImageDestinationAddImage(dest, cam.image, nil)
+                                        }
+                                    } else {
+                                        CGImageDestinationAddImage(dest, cam.image, nil)
+                                    }
+                                    if CGImageDestinationFinalize(dest) {
+                                        cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: path))
+                                    } else {
+                                        cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: nil))
+                                    }
+                                }
+                            }
+                            correctionContext = ScreenContext(
+                                displays: correctionContext.displays,
+                                cameras: cameraContexts,
+                                timestamp: correctionContext.timestamp
+                            )
+                        }
                         let correctionStart = ContinuousClock.now
-                        let correction = await corrector.correct(text: text, context: screenContext)
+                        let correction = await corrector.correct(text: text, context: correctionContext)
                         if showDebug {
                             let elapsed = ContinuousClock.now - correctionStart
                             print("[context-aware] Correction took \(elapsed)")
@@ -494,8 +497,54 @@ struct Dictate: AsyncParsableCommand {
                                 }
                                 correction = CorrectionResult(original: text, corrected: text, status: .unchanged, activity: nil, summary: nil)
                             } else {
+                                // Camera capture on demand
+                                var correctionContext = currentContext
+                                if let cameraCapture = cameraCapture {
+                                    let cameraImages = await cameraCapture.captureAll()
+                                    let dir = correctionContext.displays.first?.screenshotPath
+                                        .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
+                                        ?? NSTemporaryDirectory() + "yap/"
+                                    var cameraContexts: [CameraContext] = []
+                                    for (index, cam) in cameraImages.enumerated() {
+                                        let path = dir + "/camera-\(index).png"
+                                        if let dest = CGImageDestinationCreateWithURL(
+                                            URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil
+                                        ) {
+                                            let scale = min(1.0, 1280.0 / Double(cam.image.width))
+                                            let newWidth = Int(Double(cam.image.width) * scale)
+                                            let newHeight = Int(Double(cam.image.height) * scale)
+                                            let colorSpace = cam.image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
+                                            if let ctx = CGContext(
+                                                data: nil, width: newWidth, height: newHeight,
+                                                bitsPerComponent: cam.image.bitsPerComponent,
+                                                bytesPerRow: 0, space: colorSpace,
+                                                bitmapInfo: cam.image.alphaInfo.rawValue
+                                            ) {
+                                                ctx.interpolationQuality = .high
+                                                ctx.draw(cam.image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
+                                                if let resized = ctx.makeImage() {
+                                                    CGImageDestinationAddImage(dest, resized, nil)
+                                                } else {
+                                                    CGImageDestinationAddImage(dest, cam.image, nil)
+                                                }
+                                            } else {
+                                                CGImageDestinationAddImage(dest, cam.image, nil)
+                                            }
+                                            if CGImageDestinationFinalize(dest) {
+                                                cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: path))
+                                            } else {
+                                                cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: nil))
+                                            }
+                                        }
+                                    }
+                                    correctionContext = ScreenContext(
+                                        displays: correctionContext.displays,
+                                        cameras: cameraContexts,
+                                        timestamp: correctionContext.timestamp
+                                    )
+                                }
                                 let correctionStart = ContinuousClock.now
-                                correction = await corrector.correct(text: text, context: currentContext)
+                                correction = await corrector.correct(text: text, context: correctionContext)
                                 if showDebug {
                                     let elapsed = ContinuousClock.now - correctionStart
                                     print("[context-aware] Correction took \(elapsed)")
