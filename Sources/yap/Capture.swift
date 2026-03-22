@@ -31,6 +31,24 @@ struct Capture: AsyncParsableCommand {
         help: "Camera device ID to capture. Can be specified multiple times."
     ) var camera: [String] = []
 
+    @Option(
+        name: .long,
+        help: "App names to ignore (comma-separated). Displays with these apps are skipped.",
+        transform: { $0.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+    ) var ignoreApps: [String]?
+
+    @Option(
+        name: .long,
+        help: "Title patterns to ignore (comma-separated). Displays with matching window titles are skipped.",
+        transform: { $0.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+    ) var ignoreTitles: [String]?
+
+    @Option(
+        name: .long,
+        help: "URL patterns to ignore (comma-separated). Displays with matching URLs are skipped.",
+        transform: { $0.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+    ) var ignoreUrls: [String]?
+
     @Flag(
         name: .long,
         help: "Disable deduplication."
@@ -192,6 +210,11 @@ struct Capture: AsyncParsableCommand {
         let dedupEnabled = !noDedup
         let dedupState = DedupState()
 
+        // Copy ignore filters to local vars for closure capture
+        let ignoreAppPatterns = ignoreApps
+        let ignoreTitlePatterns = ignoreTitles
+        let ignoreUrlPatterns = ignoreUrls
+
         // Background task 1: consume transcriber results into buffer
         let consumeTask = Task.detached {
             do {
@@ -252,15 +275,25 @@ struct Capture: AsyncParsableCommand {
                 // Build records
                 var records: [any CaptureRecord] = []
 
-                // Screenshot records for each display
+                // Screenshot records for each display (skip ignored apps/urls)
                 for display in screenContext.displays {
+                    if let ignoreAppPatterns, let appName = display.appName,
+                       ignoreAppPatterns.contains(where: { appName.localizedCaseInsensitiveContains($0) }) {
+                        continue
+                    }
+                    if let ignoreTitlePatterns, let title = display.windowTitle,
+                       ignoreTitlePatterns.contains(where: { title.localizedCaseInsensitiveContains($0) }) {
+                        continue
+                    }
+                    if let ignoreUrlPatterns, let url = display.url,
+                       ignoreUrlPatterns.contains(where: { url.localizedCaseInsensitiveContains($0) }) {
+                        continue
+                    }
                     let recordID = UUID().uuidString.prefix(12).lowercased()
-                    // Save screenshot to tmp with ID-based filename
                     if let path = display.screenshotPath {
                         let destPath = captureStore.screenshotsDir + "\(recordID).png"
                         try? FileManager.default.copyItem(atPath: path, toPath: destPath)
                     }
-                    // Save OCR text to tmp alongside screenshot
                     if !display.ocrText.isEmpty {
                         let ocrDestPath = captureStore.screenshotsDir + "\(recordID).txt"
                         try? Data(display.ocrText.utf8).write(to: URL(fileURLWithPath: ocrDestPath))
