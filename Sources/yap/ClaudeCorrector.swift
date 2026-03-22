@@ -61,7 +61,8 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
             You are a speech-to-text corrector. The input is raw voice transcription.
 
             ## Rules
-            - Fix misrecognized words using screen context (app name, window title, screenshots, URL)
+            - Fix misrecognized words using screen context (app name, window title, screenshots, URL) and camera photos
+            - Camera photos show the user's physical environment. Use visible objects, text, or labels to improve transcription accuracy (e.g. food names, product labels, handwritten notes)
             - Add appropriate punctuation (。、！？) for natural Japanese text
             - Remove filler words (えーと, あの, まあ, うーん, etc.) and meaningless repetitions
             - Fix false starts and stutters into clean sentences
