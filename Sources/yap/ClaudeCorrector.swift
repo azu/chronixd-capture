@@ -63,34 +63,25 @@ final class ClaudeCorrector: Corrector, @unchecked Sendable {
         let summary: String?
     }
 
-    /// Parse JSON response from claude -p. Falls back to raw text on parse failure.
+    /// Parse JSON response from claude -p --output-format json --json-schema.
+    /// The structured output is in the "structured_output" field, not "result".
     private static func parseResponse(_ raw: String) -> ParsedResponse {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // claude --output-format json wraps result in {"result": "...", ...}
         guard let data = trimmed.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return ParsedResponse(text: trimmed, activity: nil, summary: nil)
         }
-        // The structured output may be in "result" (string containing JSON) or at top level
-        if let resultStr = json["result"] as? String,
-           let resultData = resultStr.data(using: .utf8),
-           let inner = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] {
-            return ParsedResponse(
-                text: inner["text"] as? String ?? resultStr,
-                activity: inner["activity"] as? String,
-                summary: inner["summary"] as? String
-            )
-        }
-        // Top-level JSON with text/activity/summary
-        if let text = json["text"] as? String {
+        // --json-schema puts structured output in "structured_output" field
+        if let structured = json["structured_output"] as? [String: Any],
+           let text = structured["text"] as? String {
             return ParsedResponse(
                 text: text,
-                activity: json["activity"] as? String,
-                summary: json["summary"] as? String
+                activity: structured["activity"] as? String,
+                summary: structured["summary"] as? String
             )
         }
-        // Fallback: use result as plain text
-        if let result = json["result"] as? String {
+        // Fallback: try "result" field as plain text
+        if let result = json["result"] as? String, !result.isEmpty {
             return ParsedResponse(text: result, activity: nil, summary: nil)
         }
         return ParsedResponse(text: trimmed, activity: nil, summary: nil)
