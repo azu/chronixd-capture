@@ -48,7 +48,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Capture a single frame from a device.
+    /// Capture a single frame from a device with a 3-second timeout.
     private func captureFrame(from device: AVCaptureDevice) async -> CGImage? {
         let session = AVCaptureSession()
         session.sessionPreset = .high
@@ -63,15 +63,27 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         guard session.canAddOutput(output) else { return nil }
         session.addOutput(output)
 
-        return await withCheckedContinuation { continuation in
+        // Guard to ensure continuation is resumed exactly once
+        let once = OnceGuard()
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
             let delegate = WarmupFrameDelegate(ciContext: self.ciContext) { cgImage in
                 session.stopRunning()
-                continuation.resume(returning: cgImage)
+                if once.claim() {
+                    continuation.resume(returning: cgImage)
+                }
             }
-            // Keep delegate alive via associated object
             objc_setAssociatedObject(output, "delegate", delegate, .OBJC_ASSOCIATION_RETAIN)
             output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "yap.camera.\(device.uniqueID)"))
             session.startRunning()
+
+            // Timeout: return nil after 3 seconds
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3.0) {
+                session.stopRunning()
+                if once.claim() {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 
@@ -173,6 +185,22 @@ private final class WarmupFrameDelegate: NSObject, AVCaptureVideoDataOutputSampl
         // Average brightness per sample point (max 765 = 255*3)
         let avgBrightness = totalBrightness / positions.count
         return avgBrightness < 15
+    }
+}
+
+// MARK: - OnceGuard
+
+/// Ensures a block runs at most once (thread-safe).
+private final class OnceGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }
 
