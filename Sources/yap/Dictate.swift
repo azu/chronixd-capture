@@ -389,9 +389,15 @@ struct Dictate: AsyncParsableCommand {
                         var correctionContext = screenContext
                         if let cameraCapture = cameraCapture {
                             let cameraImages = await cameraCapture.captureAll()
-                            let dir = correctionContext.displays.first?.screenshotPath
-                                .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
-                                ?? NSTemporaryDirectory() + "yap/"
+                            let dir: String
+                            if let screenshotPath = correctionContext.displays.first?.screenshotPath {
+                                dir = URL(fileURLWithPath: screenshotPath).deletingLastPathComponent().path
+                            } else {
+                                let formatter = DateFormatter()
+                                formatter.dateFormat = "yyyyMMdd-HHmmss"
+                                dir = NSTemporaryDirectory() + "yap/" + formatter.string(from: Date())
+                                try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                            }
                             var cameraContexts: [CameraContext] = []
                             for (index, cam) in cameraImages.enumerated() {
                                 let path = dir + "/camera-\(index).png"
