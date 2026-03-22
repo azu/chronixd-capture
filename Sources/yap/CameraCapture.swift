@@ -64,14 +64,8 @@ final class CameraCapture: NSObject, @unchecked Sendable {
         session.addOutput(output)
 
         return await withCheckedContinuation { continuation in
-            let delegate = SingleFrameDelegate { sampleBuffer in
+            let delegate = WarmupFrameDelegate(ciContext: self.ciContext) { cgImage in
                 session.stopRunning()
-                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent)
                 continuation.resume(returning: cgImage)
             }
             // Keep delegate alive via associated object
@@ -85,22 +79,100 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     func stop() {}
 }
 
-// MARK: - SingleFrameDelegate
+// MARK: - WarmupFrameDelegate
 
-private final class SingleFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+/// Skips initial black frames from camera warmup, returns the first valid frame.
+private final class WarmupFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private var handler: ((CMSampleBuffer) -> Void)?
+    private var handler: ((CGImage?) -> Void)?
+    private let ciContext: CIContext
+    private var frameCount = 0
+    /// Maximum frames to wait before giving up (timeout ~2 seconds at 30fps)
+    private let maxFrames = 60
+    /// Minimum frames to skip for camera warmup
+    private let skipFrames = 3
 
-    init(handler: @escaping (CMSampleBuffer) -> Void) {
+    init(ciContext: CIContext, handler: @escaping (CGImage?) -> Void) {
+        self.ciContext = ciContext
         self.handler = handler
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         lock.lock()
-        let h = handler
+        frameCount += 1
+        let count = frameCount
+        guard let h = handler else {
+            lock.unlock()
+            return
+        }
+
+        // Skip initial warmup frames
+        if count <= skipFrames {
+            lock.unlock()
+            return
+        }
+
+        // Timeout: return nil after maxFrames
+        if count > maxFrames {
+            handler = nil
+            lock.unlock()
+            h(nil)
+            return
+        }
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            lock.unlock()
+            return
+        }
+
+        // Check if the frame is mostly black (camera still warming up)
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+            lock.unlock()
+            return
+        }
+
+        if isBlackFrame(cgImage) {
+            lock.unlock()
+            return
+        }
+
         handler = nil
         lock.unlock()
-        h?(sampleBuffer)
+        h(cgImage)
+    }
+
+    /// Quick check if the image is mostly black by sampling a few pixels.
+    private func isBlackFrame(_ image: CGImage) -> Bool {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0,
+              let data = image.dataProvider?.data,
+              let ptr = CFDataGetBytePtr(data) else { return true }
+
+        let bytesPerPixel = image.bitsPerPixel / 8
+        let bytesPerRow = image.bytesPerRow
+
+        // Sample 9 points across the image
+        let positions = [
+            (width / 4, height / 4), (width / 2, height / 4), (3 * width / 4, height / 4),
+            (width / 4, height / 2), (width / 2, height / 2), (3 * width / 4, height / 2),
+            (width / 4, 3 * height / 4), (width / 2, 3 * height / 4), (3 * width / 4, 3 * height / 4),
+        ]
+
+        var totalBrightness: Int = 0
+        for (x, y) in positions {
+            let offset = y * bytesPerRow + x * bytesPerPixel
+            // BGRA format
+            let b = Int(ptr[offset])
+            let g = Int(ptr[offset + 1])
+            let r = Int(ptr[offset + 2])
+            totalBrightness += r + g + b
+        }
+
+        // Average brightness per sample point (max 765 = 255*3)
+        let avgBrightness = totalBrightness / positions.count
+        return avgBrightness < 15
     }
 }
 
