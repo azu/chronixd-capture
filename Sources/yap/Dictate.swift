@@ -309,75 +309,86 @@ struct Dictate: AsyncParsableCommand {
                 }
             }
 
-            if format == .txt {
-                var lastResultTime = Date.distantPast
-                for try await result in transcriber.results {
-                    let now = Date()
-                    let screenContext: ScreenContext
-                    if now.timeIntervalSince(lastResultTime) > 1.5 {
-                        let captureStart = ContinuousClock.now
-                        var capturedScreenContext: ScreenContext
-                        if useScreenshots {
-                            capturedScreenContext = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
-                        } else {
-                            capturedScreenContext = (try? await screenCapture.capture()) ?? emptyContext
-                        }
-                        // Camera capture
-                        if let cameraCapture = cameraCapture {
-                            let cameraImages = await cameraCapture.captureAll()
-                            let dir = capturedScreenContext.displays.first?.screenshotPath
-                                .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
-                                ?? NSTemporaryDirectory() + "yap/"
-                            var cameraContexts: [CameraContext] = []
-                            for (index, cam) in cameraImages.enumerated() {
-                                let path = dir + "/camera-\(index).png"
-                                if let dest = CGImageDestinationCreateWithURL(
-                                    URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil
+            // Background context capture: pre-capture screen + camera every 2 seconds
+            // so the context is already available when a transcription result arrives.
+            final class ContextCache: @unchecked Sendable {
+                private let lock = NSLock()
+                private var _context: ScreenContext
+                init(_ context: ScreenContext) { _context = context }
+                var context: ScreenContext {
+                    get { lock.lock(); defer { lock.unlock() }; return _context }
+                    set { lock.lock(); _context = newValue; lock.unlock() }
+                }
+            }
+            let contextCache = ContextCache(emptyContext)
+            let contextCaptureTask = Task { @MainActor in
+                while !Task.isCancelled {
+                    let captureStart = ContinuousClock.now
+                    var captured: ScreenContext
+                    if useScreenshots {
+                        captured = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
+                    } else {
+                        captured = (try? await screenCapture.capture()) ?? emptyContext
+                    }
+                    if let cameraCapture = cameraCapture {
+                        let cameraImages = await cameraCapture.captureAll()
+                        let dir = captured.displays.first?.screenshotPath
+                            .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
+                            ?? NSTemporaryDirectory() + "yap/"
+                        var cameraContexts: [CameraContext] = []
+                        for (index, cam) in cameraImages.enumerated() {
+                            let path = dir + "/camera-\(index).png"
+                            if let dest = CGImageDestinationCreateWithURL(
+                                URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil
+                            ) {
+                                let scale = min(1.0, 1280.0 / Double(cam.image.width))
+                                let newWidth = Int(Double(cam.image.width) * scale)
+                                let newHeight = Int(Double(cam.image.height) * scale)
+                                let colorSpace = cam.image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
+                                if let ctx = CGContext(
+                                    data: nil, width: newWidth, height: newHeight,
+                                    bitsPerComponent: cam.image.bitsPerComponent,
+                                    bytesPerRow: 0, space: colorSpace,
+                                    bitmapInfo: cam.image.alphaInfo.rawValue
                                 ) {
-                                    let scale = min(1.0, 1280.0 / Double(cam.image.width))
-                                    let newWidth = Int(Double(cam.image.width) * scale)
-                                    let newHeight = Int(Double(cam.image.height) * scale)
-                                    let colorSpace = cam.image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
-                                    if let ctx = CGContext(
-                                        data: nil, width: newWidth, height: newHeight,
-                                        bitsPerComponent: cam.image.bitsPerComponent,
-                                        bytesPerRow: 0, space: colorSpace,
-                                        bitmapInfo: cam.image.alphaInfo.rawValue
-                                    ) {
-                                        ctx.interpolationQuality = .high
-                                        ctx.draw(cam.image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
-                                        if let resized = ctx.makeImage() {
-                                            CGImageDestinationAddImage(dest, resized, nil)
-                                        } else {
-                                            CGImageDestinationAddImage(dest, cam.image, nil)
-                                        }
+                                    ctx.interpolationQuality = .high
+                                    ctx.draw(cam.image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
+                                    if let resized = ctx.makeImage() {
+                                        CGImageDestinationAddImage(dest, resized, nil)
                                     } else {
                                         CGImageDestinationAddImage(dest, cam.image, nil)
                                     }
-                                    if CGImageDestinationFinalize(dest) {
-                                        cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: path))
-                                    } else {
-                                        cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: nil))
-                                    }
+                                } else {
+                                    CGImageDestinationAddImage(dest, cam.image, nil)
+                                }
+                                if CGImageDestinationFinalize(dest) {
+                                    cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: path))
+                                } else {
+                                    cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: nil))
                                 }
                             }
-                            capturedScreenContext = ScreenContext(
-                                displays: capturedScreenContext.displays,
-                                cameras: cameraContexts,
-                                timestamp: capturedScreenContext.timestamp
-                            )
                         }
-                        screenContext = capturedScreenContext
-                        if showDebug {
-                            let elapsed = ContinuousClock.now - captureStart
-                            print("[context-aware] Screen capture took \(elapsed)")
-                            fflush(stdout)
-                            logScreenContext(screenContext)
-                        }
-                    } else {
-                        screenContext = emptyContext
+                        captured = ScreenContext(
+                            displays: captured.displays,
+                            cameras: cameraContexts,
+                            timestamp: captured.timestamp
+                        )
                     }
-                    lastResultTime = now
+                    contextCache.context = captured
+                    if showDebug {
+                        let elapsed = ContinuousClock.now - captureStart
+                        print("[context-aware] Background capture took \(elapsed)")
+                        fflush(stdout)
+                        logScreenContext(captured)
+                    }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+
+            if format == .txt {
+                for try await result in transcriber.results {
+                    let now = Date()
+                    let screenContext = contextCache.context
 
                     // Discard stale results from before unmute (pre-mute audio buffer)
                     if now < lastUnmuteTime {
@@ -432,81 +443,23 @@ struct Dictate: AsyncParsableCommand {
                             fflush(stdout)
                         }
                         print(correction.corrected)
+                        if let activity = correction.activity, let summary = correction.summary {
+                            print("activity: \(activity) / summary: \(summary)")
+                        }
                         fflush(stdout)
                     }
                 }
                 mediaCheckTask.cancel()
+            contextCaptureTask.cancel()
             } else {
                 if let header = format.header(locale: locale) {
                     print(header)
                 }
                 let includeWords = wordTimestamps
                 var segmentIndex = 0
-                var lastResultTime = Date.distantPast
-                var currentContext = emptyContext
 
                 for try await result in transcriber.results {
-                    let now = Date()
-                    if now.timeIntervalSince(lastResultTime) > 1.5 {
-                        let captureStart = ContinuousClock.now
-                        if useScreenshots {
-                            currentContext = (try? await screenCapture.captureWithScreenshots()) ?? currentContext
-                        } else {
-                            currentContext = (try? await screenCapture.capture()) ?? currentContext
-                        }
-                        // Camera capture
-                        if let cameraCapture = cameraCapture {
-                            let cameraImages = await cameraCapture.captureAll()
-                            let dir = currentContext.displays.first?.screenshotPath
-                                .flatMap { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
-                                ?? NSTemporaryDirectory() + "yap/"
-                            var cameraContexts: [CameraContext] = []
-                            for (index, cam) in cameraImages.enumerated() {
-                                let path = dir + "/camera-\(index).png"
-                                if let dest = CGImageDestinationCreateWithURL(
-                                    URL(fileURLWithPath: path) as CFURL, "public.png" as CFString, 1, nil
-                                ) {
-                                    let scale = min(1.0, 1280.0 / Double(cam.image.width))
-                                    let newWidth = Int(Double(cam.image.width) * scale)
-                                    let newHeight = Int(Double(cam.image.height) * scale)
-                                    let colorSpace = cam.image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
-                                    if let ctx = CGContext(
-                                        data: nil, width: newWidth, height: newHeight,
-                                        bitsPerComponent: cam.image.bitsPerComponent,
-                                        bytesPerRow: 0, space: colorSpace,
-                                        bitmapInfo: cam.image.alphaInfo.rawValue
-                                    ) {
-                                        ctx.interpolationQuality = .high
-                                        ctx.draw(cam.image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
-                                        if let resized = ctx.makeImage() {
-                                            CGImageDestinationAddImage(dest, resized, nil)
-                                        } else {
-                                            CGImageDestinationAddImage(dest, cam.image, nil)
-                                        }
-                                    } else {
-                                        CGImageDestinationAddImage(dest, cam.image, nil)
-                                    }
-                                    if CGImageDestinationFinalize(dest) {
-                                        cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: path))
-                                    } else {
-                                        cameraContexts.append(CameraContext(deviceID: cam.deviceID, imagePath: nil))
-                                    }
-                                }
-                            }
-                            currentContext = ScreenContext(
-                                displays: currentContext.displays,
-                                cameras: cameraContexts,
-                                timestamp: currentContext.timestamp
-                            )
-                        }
-                        if showDebug {
-                            let elapsed = ContinuousClock.now - captureStart
-                            print("[context-aware] Screen capture took \(elapsed)")
-                            fflush(stdout)
-                            logScreenContext(currentContext)
-                        }
-                    }
-                    lastResultTime = now
+                    let currentContext = contextCache.context
 
                     // Skip output when media site is visible AND media is actively playing
                     let hasMediaSite = currentContext.displays.contains { $0.isPlayingMedia }
@@ -572,6 +525,7 @@ struct Dictate: AsyncParsableCommand {
                 }
             }
             mediaCheckTask.cancel()
+            contextCaptureTask.cancel()
         } else if format == .txt {
             for try await result in transcriber.results {
                 let text = String(result.text.characters)
