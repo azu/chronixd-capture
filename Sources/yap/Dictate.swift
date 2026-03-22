@@ -610,6 +610,12 @@ private func logScreenContext(_ context: ScreenContext) {
             lines.append("    OCR: \(display.ocrText.count) chars")
         }
     }
+    for (i, camera) in context.cameras.enumerated() {
+        lines.append("  Camera \(i + 1) (ID: \(camera.deviceID)):")
+        if let path = camera.imagePath {
+            lines.append("    Photo: \(path)")
+        }
+    }
     let focusedDisplays = context.displays.filter { $0.isFocused }
     if let focused = focusedDisplays.first {
         lines.append("  Focused: Display \(focused.displayID)")
