@@ -40,9 +40,14 @@ final class MLXCorrector: Corrector, @unchecked Sendable {
         do {
             let session = try await newSession()
             let prompt = buildPrompt(text: text, context: context)
-            let images: [UserInput.Image] = context.displays.compactMap { display in
+            var images: [UserInput.Image] = context.displays.compactMap { display in
                 guard let path = display.screenshotPath else { return nil }
                 return .url(URL(fileURLWithPath: path))
+            }
+            for camera in context.cameras {
+                if let path = camera.imagePath {
+                    images.append(.url(URL(fileURLWithPath: path)))
+                }
             }
 
             let response: String
