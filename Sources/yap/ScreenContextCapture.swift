@@ -197,12 +197,13 @@ private let browserAppNames = Set([
 ])
 
 /// Extract URL from a browser's address bar via Accessibility API.
-/// Searches for AXComboBox or AXTextField with a URL-like value.
+/// First tries AXComboBox/AXTextField (address bar value), then falls back to
+/// AXWebArea's AXURL attribute which works reliably for Firefox and Arc.
 private func axBrowserURL(for pid: Int32) -> String? {
     let axApp = AXUIElementCreateApplication(pid)
 
-    // Search up to depth 5 for URL bar
-    func findURL(_ element: AXUIElement, depth: Int = 0) -> String? {
+    // Strategy 1: Find URL bar (AXComboBox/AXTextField/AXStaticText)
+    func findURLBar(_ element: AXUIElement, depth: Int = 0) -> String? {
         guard depth < 8 else { return nil }
 
         var roleRef: CFTypeRef?
@@ -229,14 +230,44 @@ private func axBrowserURL(for pid: Int32) -> String? {
         AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
         guard let children = childrenRef as? [AXUIElement] else { return nil }
         for child in children {
-            if let url = findURL(child, depth: depth + 1) {
+            if let url = findURLBar(child, depth: depth + 1) {
                 return url
             }
         }
         return nil
     }
 
-    return findURL(axApp)
+    // Strategy 2: Find AXWebArea's AXURL attribute (works for Firefox, Arc, etc.)
+    func findWebAreaURL(_ element: AXUIElement, depth: Int = 0) -> String? {
+        guard depth < 8 else { return nil }
+
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? ""
+
+        if role == "AXWebArea" {
+            var urlRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, "AXURL" as CFString, &urlRef)
+            if let url = urlRef as? URL {
+                return url.absoluteString
+            }
+            if let urlString = urlRef as? String, looksLikeURL(urlString) {
+                return urlString
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
+        guard let children = childrenRef as? [AXUIElement] else { return nil }
+        for child in children {
+            if let url = findWebAreaURL(child, depth: depth + 1) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    return findURLBar(axApp) ?? findWebAreaURL(axApp)
 }
 
 private func looksLikeURL(_ value: String) -> Bool {
