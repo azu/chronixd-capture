@@ -22,11 +22,13 @@ struct ScreenshotRecord: CaptureRecord, Codable, Sendable {
     let title: String?
     let isFocused: Bool
     let isPlayingMedia: Bool
+    let appContext: String?
 
     enum CodingKeys: String, CodingKey {
         case type, id, unixTimeMs, url, app, title
         case isFocused = "is_focused"
         case isPlayingMedia = "is_playing_media"
+        case appContext = "app_context"
     }
 }
 
@@ -72,18 +74,16 @@ struct ScreenshotDetailRecord: Codable, Sendable {
     let title: String?
     let isFocused: Bool
     let isPlayingMedia: Bool
+    let appContext: String?
     let path: String?
     let available: Bool
-    let ocrPath: String?
-    let ocrAvailable: Bool
 
     enum CodingKeys: String, CodingKey {
         case type, id, unixTimeMs, url, app, title
         case isFocused = "is_focused"
         case isPlayingMedia = "is_playing_media"
+        case appContext = "app_context"
         case path, available
-        case ocrPath = "ocr_path"
-        case ocrAvailable = "ocr_available"
     }
 }
 
@@ -104,7 +104,7 @@ struct CameraDetailRecord: Codable, Sendable {
 enum CaptureRecordCoder {
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
-        e.outputFormatting = [.sortedKeys]
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return e
     }()
 

@@ -1,7 +1,6 @@
 import ApplicationServices
 import ArgumentParser
 @preconcurrency import AVFoundation
-import CommonCrypto
 import Foundation
 @preconcurrency import Noora
 import ScreenCaptureKit
@@ -251,6 +250,7 @@ struct Capture: AsyncParsableCommand {
         // Background task 2: periodic capture timer
         let intervalSeconds = captureInterval
         let captureStore = store
+        let hooksDataDir = dataDir
         let captureTimerTask = Task { @MainActor in
             while !Task.isCancelled {
                 try await Task.sleep(nanoseconds: UInt64(intervalSeconds) * 1_000_000_000)
@@ -259,7 +259,7 @@ struct Capture: AsyncParsableCommand {
                 let now = Date()
                 let nowMs = Int64(now.timeIntervalSince1970 * 1000)
 
-                // Capture screen context (with OCR + screenshots)
+                // Capture screen context
                 let screenContext: ScreenContext
                 do {
                     screenContext = try await screenCapture.capture()
@@ -297,8 +297,7 @@ struct Capture: AsyncParsableCommand {
                             title: display.windowTitle ?? "",
                             url: display.url ?? ""
                         )
-                        let ocrHash = sha256(display.ocrText)
-                        if dedupState.isDuplicate(displayID: display.displayID, key: displayKey, ocrHash: ocrHash) {
+                        if dedupState.isDuplicate(displayID: display.displayID, key: displayKey) {
                             continue
                         }
                     }
@@ -307,10 +306,17 @@ struct Capture: AsyncParsableCommand {
                         let destPath = captureStore.screenshotsDir + "\(recordID).png"
                         try? FileManager.default.copyItem(atPath: path, toPath: destPath)
                     }
-                    if !display.ocrText.isEmpty {
-                        let ocrDestPath = captureStore.screenshotsDir + "\(recordID).txt"
-                        try? Data(display.ocrText.utf8).write(to: URL(fileURLWithPath: ocrDestPath))
+                    let hookContext: String? = if display.isFocused {
+                        runAppContextHook(
+                            dataDir: hooksDataDir,
+                            appName: display.appName ?? "Unknown",
+                            windowTitle: display.windowTitle ?? "",
+                            pid: display.pid
+                        )
+                    } else {
+                        nil
                     }
+
                     records.append(ScreenshotRecord(
                         id: String(recordID),
                         unixTimeMs: nowMs,
@@ -318,7 +324,8 @@ struct Capture: AsyncParsableCommand {
                         app: display.appName ?? "Unknown",
                         title: display.windowTitle,
                         isFocused: display.isFocused,
-                        isPlayingMedia: display.isPlayingMedia
+                        isPlayingMedia: display.isPlayingMedia,
+                        appContext: hookContext
                     ))
                 }
 
@@ -446,17 +453,56 @@ private struct DedupKey: Equatable {
 private final class DedupState: @unchecked Sendable {
     private let lock = NSLock()
     private var lastKeys: [CGDirectDisplayID: DedupKey] = [:]
-    private var lastOCRHashes: [CGDirectDisplayID: String] = [:]
 
-    func isDuplicate(displayID: CGDirectDisplayID, key: DedupKey, ocrHash: String) -> Bool {
+    func isDuplicate(displayID: CGDirectDisplayID, key: DedupKey) -> Bool {
         lock.lock()
         defer {
             lastKeys[displayID] = key
-            lastOCRHashes[displayID] = ocrHash
             lock.unlock()
         }
-        return lastKeys[displayID] == key && lastOCRHashes[displayID] == ocrHash
+        return lastKeys[displayID] == key
     }
+}
+
+// MARK: - App Context Hooks
+
+/// Run a hook script at `{dataDir}/hooks/{appName}` if it exists and is executable.
+/// Arguments: $1 = windowTitle, $2 = pid. Timeout: 2 seconds.
+private func runAppContextHook(dataDir: String, appName: String, windowTitle: String, pid: Int32) -> String? {
+    let hookPath = (dataDir as NSString).appendingPathComponent("hooks/\(appName)")
+    guard FileManager.default.isExecutableFile(atPath: hookPath) else { return nil }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: hookPath)
+    process.arguments = [windowTitle, String(pid)]
+
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+
+    let deadline = DispatchTime.now() + .seconds(2)
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global().async {
+        process.waitUntilExit()
+        group.leave()
+    }
+    if group.wait(timeout: deadline) == .timedOut {
+        process.terminate()
+        return nil
+    }
+
+    guard process.terminationStatus == 0 else { return nil }
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return output?.isEmpty == true ? nil : output
 }
 
 // MARK: - Helpers
@@ -465,13 +511,4 @@ private func normalizeURL(_ url: String?) -> String? {
     guard let url, !url.isEmpty else { return nil }
     if url.contains("://") { return url }
     return "https://" + url
-}
-
-private func sha256(_ string: String) -> String {
-    let data = Data(string.utf8)
-    var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-    data.withUnsafeBytes {
-        _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash)
-    }
-    return hash.map { String(format: "%02x", $0) }.joined()
 }

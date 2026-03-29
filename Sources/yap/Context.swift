@@ -84,10 +84,9 @@ struct Context: ParsableCommand {
                         title: r.title,
                         isFocused: r.isFocused,
                         isPlayingMedia: r.isPlayingMedia,
+                        appContext: r.appContext,
                         path: paths.screenshot,
-                        available: paths.screenshot != nil,
-                        ocrPath: paths.ocr,
-                        ocrAvailable: paths.ocr != nil
+                        available: paths.screenshot != nil
                     )
                     let line = try CaptureRecordCoder.encodeDetail(detailRecord)
                     print(line)

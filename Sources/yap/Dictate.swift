@@ -1,3 +1,4 @@
+import Accelerate
 import ApplicationServices
 import ArgumentParser
 @preconcurrency import AVFoundation
@@ -375,7 +376,7 @@ struct Dictate: AsyncParsableCommand {
                     let captureStart = ContinuousClock.now
                     let captured: ScreenContext
                     if useScreenshots {
-                        captured = (try? await screenCapture.captureWithScreenshots()) ?? emptyContext
+                        captured = (try? await screenCapture.capture()) ?? emptyContext
                     } else {
                         captured = (try? await screenCapture.capture()) ?? emptyContext
                     }
@@ -729,9 +730,6 @@ private func logScreenContext(_ context: ScreenContext) {
         if display.isPlayingMedia {
             lines.append("    Media site detected")
         }
-        if !display.ocrText.isEmpty {
-            lines.append("    OCR: \(display.ocrText.count) chars")
-        }
     }
     for (i, camera) in context.cameras.enumerated() {
         lines.append("  Camera \(i + 1) (ID: \(camera.deviceID)):")
@@ -821,12 +819,9 @@ final class MicrophoneCapture: @unchecked Sendable {
         // Only triggers once per speech segment (requires sustained silence to reset)
         if let channelData = buffer.floatChannelData {
             let frames = Int(buffer.frameLength)
-            var sum: Float = 0
-            for i in 0..<frames {
-                let sample = channelData[0][i]
-                sum += sample * sample
-            }
-            let rms = sqrt(sum / Float(max(frames, 1)))
+            var sumOfSquares: Float = 0
+            vDSP_svesq(channelData[0], 1, &sumOfSquares, vDSP_Length(frames))
+            let rms = sqrt(sumOfSquares / Float(max(frames, 1)))
             if rms > vadThreshold {
                 silenceStartTime = nil
                 if !inSpeech {

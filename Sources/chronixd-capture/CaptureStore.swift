@@ -8,6 +8,7 @@ final class CaptureStore: Sendable {
 
     var capturesDir: String { dataDir + "/captures/" }
     var summariesDir: String { dataDir + "/summaries/" }
+    var hooksDir: String { dataDir + "/hooks/" }
     var tmpDir: String { NSTemporaryDirectory() + "yap/" + sessionID + "/" }
     var screenshotsDir: String { tmpDir + "screenshots/" }
     var camerasDir: String { tmpDir + "cameras/" }
@@ -25,6 +26,7 @@ final class CaptureStore: Sendable {
         let fm = FileManager.default
         try fm.createDirectory(atPath: capturesDir, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: summariesDir, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: hooksDir, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: screenshotsDir, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: camerasDir, withIntermediateDirectories: true)
     }
@@ -59,28 +61,26 @@ final class CaptureStore: Sendable {
     }
 
     /// Resolve a record ID to tmp file paths by searching across all sessions.
-    /// Returns (screenshotPath, ocrPath) — each nil if not found.
-    static func resolvePaths(for id: String) -> (screenshot: String?, ocr: String?, camera: String?) {
+    /// Returns (screenshotPath, cameraPath) — each nil if not found.
+    static func resolvePaths(for id: String) -> (screenshot: String?, camera: String?) {
         let fm = FileManager.default
         let base = tmpBaseDir
         guard let sessions = try? fm.contentsOfDirectory(atPath: base) else {
-            return (nil, nil, nil)
+            return (nil, nil)
         }
         for session in sessions {
             let screenshotsDir = base + session + "/screenshots/"
             let camerasDir = base + session + "/cameras/"
             let pngPath = screenshotsDir + id + ".png"
             if fm.fileExists(atPath: pngPath) {
-                let txtPath = screenshotsDir + id + ".txt"
-                let ocrPath = fm.fileExists(atPath: txtPath) ? txtPath : nil
-                return (pngPath, ocrPath, nil)
+                return (pngPath, nil)
             }
             let camPath = camerasDir + id + ".png"
             if fm.fileExists(atPath: camPath) {
-                return (nil, nil, camPath)
+                return (nil, camPath)
             }
         }
-        return (nil, nil, nil)
+        return (nil, nil)
     }
 
     private func readNDJSONFiles(in directory: String, from startMs: Int64, to endMs: Int64) throws -> [any CaptureRecord] {

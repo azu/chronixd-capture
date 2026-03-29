@@ -2,7 +2,6 @@
 import ApplicationServices
 import CoreMedia
 import ScreenCaptureKit
-import Vision
 
 // MARK: - ScreenContext
 
@@ -11,12 +10,13 @@ struct DisplayContext: Sendable {
     let appName: String?
     let windowTitle: String?
     let url: String?
-    let ocrText: String
     let screenshotPath: String?
     /// Whether this display appears to be playing media (video/streaming site).
     let isPlayingMedia: Bool
     /// Whether this display has the key window (user focus).
     let isFocused: Bool
+    /// Process ID of the frontmost app on this display.
+    let pid: Int32
 }
 
 /// Default keywords to detect media/video sites in window titles.
@@ -46,29 +46,18 @@ struct ScreenContext: Sendable {
 // MARK: - ScreenContextCapture
 
 final class ScreenContextCapture: Sendable {
-    static let maxOCRLength = 2000
-
     let mediaTitleKeywords: [String]
 
     init(mediaTitleKeywords: [String] = defaultMediaTitleKeywords) {
         self.mediaTitleKeywords = mediaTitleKeywords
     }
 
-    /// Capture screen context with Vision OCR (for local mode).
+    /// Capture screen context with screenshots and metadata (no OCR).
     @MainActor
     func capture() async throws -> ScreenContext {
         let windowsByDisplay = captureVisibleWindows()
         let focusedDisplayID = activeDisplayID()
-        let displays = try await captureAllDisplays(ocr: true, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
-        return ScreenContext(displays: displays, cameras: [], timestamp: Date())
-    }
-
-    /// Capture screen context with screenshots only, no OCR (for claude mode).
-    @MainActor
-    func captureWithScreenshots() async throws -> ScreenContext {
-        let windowsByDisplay = captureVisibleWindows()
-        let focusedDisplayID = activeDisplayID()
-        let displays = try await captureAllDisplays(ocr: false, windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
+        let displays = try await captureAllDisplays(windowsByDisplay: windowsByDisplay, mediaTitleKeywords: mediaTitleKeywords, focusedDisplayID: focusedDisplayID)
         return ScreenContext(displays: displays, cameras: [], timestamp: Date())
     }
 
@@ -197,12 +186,13 @@ private let browserAppNames = Set([
 ])
 
 /// Extract URL from a browser's address bar via Accessibility API.
-/// Searches for AXComboBox or AXTextField with a URL-like value.
+/// First tries AXComboBox/AXTextField (address bar value), then falls back to
+/// AXWebArea's AXURL attribute which works reliably for Firefox and Arc.
 private func axBrowserURL(for pid: Int32) -> String? {
     let axApp = AXUIElementCreateApplication(pid)
 
-    // Search up to depth 5 for URL bar
-    func findURL(_ element: AXUIElement, depth: Int = 0) -> String? {
+    // Strategy 1: Find URL bar (AXComboBox/AXTextField/AXStaticText)
+    func findURLBar(_ element: AXUIElement, depth: Int = 0) -> String? {
         guard depth < 8 else { return nil }
 
         var roleRef: CFTypeRef?
@@ -229,14 +219,44 @@ private func axBrowserURL(for pid: Int32) -> String? {
         AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
         guard let children = childrenRef as? [AXUIElement] else { return nil }
         for child in children {
-            if let url = findURL(child, depth: depth + 1) {
+            if let url = findURLBar(child, depth: depth + 1) {
                 return url
             }
         }
         return nil
     }
 
-    return findURL(axApp)
+    // Strategy 2: Find AXWebArea's AXURL attribute (works for Firefox, Arc, etc.)
+    func findWebAreaURL(_ element: AXUIElement, depth: Int = 0) -> String? {
+        guard depth < 8 else { return nil }
+
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? ""
+
+        if role == "AXWebArea" {
+            var urlRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, "AXURL" as CFString, &urlRef)
+            if let url = urlRef as? URL {
+                return url.absoluteString
+            }
+            if let urlString = urlRef as? String, looksLikeURL(urlString) {
+                return urlString
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
+        guard let children = childrenRef as? [AXUIElement] else { return nil }
+        for child in children {
+            if let url = findWebAreaURL(child, depth: depth + 1) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    return findURLBar(axApp) ?? findWebAreaURL(axApp)
 }
 
 private func looksLikeURL(_ value: String) -> Bool {
@@ -300,7 +320,6 @@ private func activeDisplayID() -> CGDirectDisplayID {
 
 /// Capture all displays and return per-display context with matched window info.
 private func captureAllDisplays(
-    ocr: Bool,
     windowsByDisplay: [CGDirectDisplayID: WindowEntry],
     mediaTitleKeywords: [String],
     focusedDisplayID: CGDirectDisplayID
@@ -333,13 +352,6 @@ private func captureAllDisplays(
             }
         }
 
-        // OCR
-        var ocrText = ""
-        if ocr {
-            let text = try await performOCR(on: image)
-            ocrText = String(text.prefix(ScreenContextCapture.maxOCRLength))
-        }
-
         // Match window info for this display
         let windowInfo = windowsByDisplay[display.displayID]
 
@@ -367,10 +379,10 @@ private func captureAllDisplays(
             appName: windowInfo?.appName,
             windowTitle: windowInfo?.windowTitle,
             url: url,
-            ocrText: ocrText,
             screenshotPath: screenshotPath,
             isPlayingMedia: isMedia,
-            isFocused: display.displayID == focusedDisplayID
+            isFocused: display.displayID == focusedDisplayID,
+            pid: windowInfo?.pid ?? 0
         ))
     }
 
@@ -407,29 +419,3 @@ private func cleanupOldCaptures(in directory: String, keep: Int) {
     }
 }
 
-private func performOCR(on image: CGImage) async throws -> String {
-    try await withCheckedThrowingContinuation { continuation in
-        let request = VNRecognizeTextRequest { request, error in
-            if let error {
-                continuation.resume(throwing: error)
-                return
-            }
-            let observations = request.results as? [VNRecognizedTextObservation] ?? []
-            let text = observations
-                .compactMap { $0.topCandidates(1).first?.string }
-                .joined(separator: "\n")
-            let truncated = String(text.prefix(ScreenContextCapture.maxOCRLength))
-            continuation.resume(returning: truncated)
-        }
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        request.recognitionLanguages = ["ja", "en"]
-
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            continuation.resume(throwing: error)
-        }
-    }
-}

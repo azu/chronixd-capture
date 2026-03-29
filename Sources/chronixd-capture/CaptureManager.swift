@@ -1,6 +1,5 @@
 import ApplicationServices
 @preconcurrency import AVFoundation
-import CommonCrypto
 import Foundation
 import ScreenCaptureKit
 import Speech
@@ -47,7 +46,10 @@ final class CaptureManager: @unchecked Sendable {
             throw CaptureManagerError.speechNotAvailable
         }
 
-        guard AXIsProcessTrusted() else {
+        // Prompt the system Accessibility dialog if not yet trusted
+        let promptKey = "AXTrustedCheckOptionPrompt" as CFString
+        let options = [promptKey: true] as CFDictionary
+        guard AXIsProcessTrustedWithOptions(options) else {
             throw CaptureManagerError.accessibilityPermissionDenied
         }
 
@@ -217,8 +219,7 @@ final class CaptureManager: @unchecked Sendable {
                             title: display.windowTitle ?? "",
                             url: display.url ?? ""
                         )
-                        let ocrHash = sha256(display.ocrText)
-                        if dedupState.isDuplicate(displayID: display.displayID, key: displayKey, ocrHash: ocrHash) {
+                        if dedupState.isDuplicate(displayID: display.displayID, key: displayKey) {
                             continue
                         }
                     }
@@ -227,10 +228,18 @@ final class CaptureManager: @unchecked Sendable {
                         let destPath = store.screenshotsDir + "\(recordID).png"
                         try? FileManager.default.copyItem(atPath: path, toPath: destPath)
                     }
-                    if !display.ocrText.isEmpty {
-                        let ocrDestPath = store.screenshotsDir + "\(recordID).txt"
-                        try? Data(display.ocrText.utf8).write(to: URL(fileURLWithPath: ocrDestPath))
+                    // Run app context hook if available
+                    let hookContext: String? = if display.isFocused {
+                        runAppContextHook(
+                            dataDir: config.dataDir,
+                            appName: display.appName ?? "Unknown",
+                            windowTitle: display.windowTitle ?? "",
+                            pid: display.pid
+                        )
+                    } else {
+                        nil
                     }
+
                     records.append(ScreenshotRecord(
                         id: String(recordID),
                         unixTimeMs: nowMs,
@@ -238,7 +247,8 @@ final class CaptureManager: @unchecked Sendable {
                         app: display.appName ?? "Unknown",
                         title: display.windowTitle,
                         isFocused: display.isFocused,
-                        isPlayingMedia: display.isPlayingMedia
+                        isPlayingMedia: display.isPlayingMedia,
+                        appContext: hookContext
                     ))
                 }
 
@@ -345,17 +355,62 @@ struct DedupKey: Equatable {
 final class DedupState: @unchecked Sendable {
     private let lock = NSLock()
     private var lastKeys: [CGDirectDisplayID: DedupKey] = [:]
-    private var lastOCRHashes: [CGDirectDisplayID: String] = [:]
 
-    func isDuplicate(displayID: CGDirectDisplayID, key: DedupKey, ocrHash: String) -> Bool {
+    func isDuplicate(displayID: CGDirectDisplayID, key: DedupKey) -> Bool {
         lock.lock()
         defer {
             lastKeys[displayID] = key
-            lastOCRHashes[displayID] = ocrHash
             lock.unlock()
         }
-        return lastKeys[displayID] == key && lastOCRHashes[displayID] == ocrHash
+        return lastKeys[displayID] == key
     }
+}
+
+// MARK: - App Context Hooks
+
+/// Run a hook script at `{dataDir}/hooks/{appName}` if it exists and is executable.
+/// Arguments: $1 = windowTitle, $2 = pid. Timeout: 2 seconds.
+func runAppContextHook(dataDir: String, appName: String, windowTitle: String, pid: Int32) -> String? {
+    let hookPath = (dataDir as NSString).appendingPathComponent("hooks/\(appName)")
+    guard FileManager.default.isExecutableFile(atPath: hookPath) else { return nil }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: hookPath)
+    process.arguments = [windowTitle, String(pid)]
+
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+
+    do {
+        try process.run()
+    } catch {
+        NSLog("[chronixd-capture] Hook failed to launch for %@: %@", appName, "\(error)")
+        return nil
+    }
+
+    // Timeout after 2 seconds
+    let deadline = DispatchTime.now() + .seconds(2)
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global().async {
+        process.waitUntilExit()
+        group.leave()
+    }
+    if group.wait(timeout: deadline) == .timedOut {
+        process.terminate()
+        NSLog("[chronixd-capture] Hook timed out for %@", appName)
+        return nil
+    }
+
+    guard process.terminationStatus == 0 else {
+        NSLog("[chronixd-capture] Hook exited with status %d for %@", process.terminationStatus, appName)
+        return nil
+    }
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return output?.isEmpty == true ? nil : output
 }
 
 // MARK: - Helpers
@@ -364,15 +419,6 @@ func normalizeURL(_ url: String?) -> String? {
     guard let url, !url.isEmpty else { return nil }
     if url.contains("://") { return url }
     return "https://" + url
-}
-
-func sha256(_ string: String) -> String {
-    let data = Data(string.utf8)
-    var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-    data.withUnsafeBytes {
-        _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash)
-    }
-    return hash.map { String(format: "%02x", $0) }.joined()
 }
 
 // MARK: - CaptureManagerError
