@@ -85,6 +85,8 @@ struct Context: ParsableCommand {
                         isFocused: r.isFocused,
                         isPlayingMedia: r.isPlayingMedia,
                         appContext: r.appContext,
+                        idleSeconds: r.idleSeconds,
+                        scrollPosition: r.scrollPosition,
                         path: paths.screenshot,
                         available: paths.screenshot != nil
                     )
@@ -204,6 +206,8 @@ struct Context: ParsableCommand {
     - url: string? — browser URL (if applicable)
     - is_focused: boolean — whether this display had user focus
     - is_playing_media: boolean — whether media was detected
+    - idle_seconds: number? — seconds since last keyboard/mouse input (focused display only)
+    - scroll_position: number? — vertical scroll position 0.0–1.0 (focused display only)
 
     With --detail, adds:
     - path: string? — screenshot image file path
@@ -250,6 +254,8 @@ struct Context: ParsableCommand {
     - screenshot records show what app/page the user was looking at
     - transcription records show what the user was saying
     - is_focused: true indicates the display the user was actively using
+    - idle_seconds: high values (e.g. >60) suggest the user is away; low values mean active interaction
+    - scroll_position changes between consecutive records indicate the user is reading/scrolling
     - Summarize activity in 1-2 sentences per time period
     """
 }

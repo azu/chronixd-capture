@@ -325,7 +325,9 @@ struct Capture: AsyncParsableCommand {
                         title: display.windowTitle,
                         isFocused: display.isFocused,
                         isPlayingMedia: display.isPlayingMedia,
-                        appContext: hookContext
+                        appContext: hookContext,
+                        idleSeconds: display.idleSeconds.map { ($0 * 10).rounded() / 10 },
+                        scrollPosition: display.scrollPosition.map { ($0 * 1000).rounded() / 1000 }
                     ))
                 }
 

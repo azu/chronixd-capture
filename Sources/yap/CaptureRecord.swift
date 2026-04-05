@@ -23,12 +23,16 @@ struct ScreenshotRecord: CaptureRecord, Codable, Sendable {
     let isFocused: Bool
     let isPlayingMedia: Bool
     let appContext: String?
+    let idleSeconds: Double?
+    let scrollPosition: Double?
 
     enum CodingKeys: String, CodingKey {
         case type, id, unixTimeMs, url, app, title
         case isFocused = "is_focused"
         case isPlayingMedia = "is_playing_media"
         case appContext = "app_context"
+        case idleSeconds = "idle_seconds"
+        case scrollPosition = "scroll_position"
     }
 }
 
@@ -75,6 +79,8 @@ struct ScreenshotDetailRecord: Codable, Sendable {
     let isFocused: Bool
     let isPlayingMedia: Bool
     let appContext: String?
+    let idleSeconds: Double?
+    let scrollPosition: Double?
     let path: String?
     let available: Bool
 
@@ -83,6 +89,8 @@ struct ScreenshotDetailRecord: Codable, Sendable {
         case isFocused = "is_focused"
         case isPlayingMedia = "is_playing_media"
         case appContext = "app_context"
+        case idleSeconds = "idle_seconds"
+        case scrollPosition = "scroll_position"
         case path, available
     }
 }

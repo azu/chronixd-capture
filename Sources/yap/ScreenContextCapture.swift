@@ -17,6 +17,10 @@ struct DisplayContext: Sendable {
     let isFocused: Bool
     /// Process ID of the frontmost app on this display.
     let pid: Int32
+    /// Seconds since last user input (keyboard/mouse). Only set for focused display.
+    let idleSeconds: Double?
+    /// Normalized scroll position (0.0–1.0) of the frontmost scroll area. Only set for focused display.
+    let scrollPosition: Double?
 }
 
 /// Default keywords to detect media/video sites in window titles.
@@ -374,6 +378,19 @@ private func captureAllDisplays(
             nil
         }
 
+        // Capture idle time and scroll position for focused display
+        let isFocused = display.displayID == focusedDisplayID
+        let idleSeconds: Double? = if isFocused {
+            systemIdleSeconds()
+        } else {
+            nil
+        }
+        let scrollPosition: Double? = if isFocused, let info = windowInfo {
+            axScrollPosition(for: info.pid)
+        } else {
+            nil
+        }
+
         results.append(DisplayContext(
             displayID: display.displayID,
             appName: windowInfo?.appName,
@@ -381,8 +398,10 @@ private func captureAllDisplays(
             url: url,
             screenshotPath: screenshotPath,
             isPlayingMedia: isMedia,
-            isFocused: display.displayID == focusedDisplayID,
-            pid: windowInfo?.pid ?? 0
+            isFocused: isFocused,
+            pid: windowInfo?.pid ?? 0,
+            idleSeconds: idleSeconds,
+            scrollPosition: scrollPosition
         ))
     }
 
@@ -406,6 +425,110 @@ private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {
         contentFilter: filter,
         configuration: config
     )
+}
+
+/// Returns seconds since last keyboard or mouse event.
+private func systemIdleSeconds() -> Double {
+    let mouse = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved)
+    let key = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+    let click = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
+    let scroll = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .scrollWheel)
+    return min(mouse, key, click, scroll)
+}
+
+/// Extract normalized vertical scroll position (0.0–1.0) from the frontmost window's scroll area.
+/// Strategy 1: AXVerticalScrollBar AXValue (native apps like Safari, Xcode).
+/// Strategy 2: Compare AXScrollArea frame vs content child frame (Firefox, Chromium-based browsers).
+private func axScrollPosition(for pid: Int32) -> Double? {
+    let axApp = AXUIElementCreateApplication(pid)
+
+    var focusedWindowRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
+    guard let focusedWindow = focusedWindowRef else { return nil }
+
+    // Find largest AXScrollArea (main content area)
+    func findLargestScrollArea(_ element: AXUIElement, depth: Int = 0) -> (AXUIElement, CGRect)? {
+        guard depth < 8 else { return nil }
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? ""
+
+        var best: (AXUIElement, CGRect)?
+        if role == "AXScrollArea" {
+            if let rect = axFrame(element), rect.width > 100 && rect.height > 100 {
+                best = (element, rect)
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
+        guard let children = childrenRef as? [AXUIElement] else { return best }
+        for child in children {
+            if let found = findLargestScrollArea(child, depth: depth + 1) {
+                if best == nil || found.1.width * found.1.height > best!.1.width * best!.1.height {
+                    best = found
+                }
+            }
+        }
+        return best
+    }
+
+    // swiftlint:disable:next force_cast
+    guard let (scrollArea, scrollAreaRect) = findLargestScrollArea(focusedWindow as! AXUIElement) else { return nil }
+
+    // Strategy 1: AXVerticalScrollBar (native apps)
+    var vScrollRef: CFTypeRef?
+    if AXUIElementCopyAttributeValue(scrollArea, "AXVerticalScrollBar" as CFString, &vScrollRef) == .success,
+       let vScroll = vScrollRef {
+        var valueRef: CFTypeRef?
+        // swiftlint:disable:next force_cast
+        AXUIElementCopyAttributeValue(vScroll as! AXUIElement, kAXValueAttribute as CFString, &valueRef)
+        if let value = valueRef as? Double { return value }
+        if let value = valueRef as? NSNumber { return value.doubleValue }
+    }
+
+    // Strategy 2: Content child position relative to scroll area (Firefox, etc.)
+    // Walk into AXWebArea children to find the scrollable content element
+    func findContentRect(in element: AXUIElement, depth: Int = 0) -> CGRect? {
+        guard depth < 4 else { return nil }
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
+        guard let children = childrenRef as? [AXUIElement] else { return nil }
+
+        for child in children {
+            var roleRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef)
+            let childRole = roleRef as? String ?? ""
+
+            if let childRect = axFrame(child), childRect.height > scrollAreaRect.height {
+                return childRect
+            }
+            // Recurse into AXWebArea
+            if childRole == "AXWebArea" {
+                if let found = findContentRect(in: child, depth: depth + 1) { return found }
+            }
+        }
+        return nil
+    }
+
+    if let contentRect = findContentRect(in: scrollArea) {
+        let maxScroll = contentRect.height - scrollAreaRect.height
+        guard maxScroll > 0 else { return 0 }
+        let scrollOffset = scrollAreaRect.origin.y - contentRect.origin.y
+        return max(0, min(1, scrollOffset / maxScroll))
+    }
+
+    return nil
+}
+
+private func axFrame(_ element: AXUIElement) -> CGRect? {
+    var ref: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &ref)
+    guard let val = ref else { return nil }
+    var rect = CGRect.zero
+    // swiftlint:disable:next force_cast
+    AXValueGetValue(val as! AXValue, .cgRect, &rect)
+    return rect
 }
 
 private func cleanupOldCaptures(in directory: String, keep: Int) {
