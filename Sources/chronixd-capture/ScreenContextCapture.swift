@@ -411,7 +411,9 @@ private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {
 private func cleanupOldCaptures(in directory: String, keep: Int) {
     let fm = FileManager.default
     guard let entries = try? fm.contentsOfDirectory(atPath: directory) else { return }
-    let sorted = entries.sorted()
+    // Only clean up timestamped directories (YYYYMMDD-HHmmss format), not session UUID dirs
+    let timestamped = entries.filter { $0.count == 15 && $0.contains("-") && $0.first?.isNumber == true }
+    let sorted = timestamped.sorted()
     if sorted.count > keep {
         for entry in sorted.prefix(sorted.count - keep) {
             try? fm.removeItem(atPath: directory + entry)

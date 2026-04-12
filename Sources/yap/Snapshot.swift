@@ -20,7 +20,6 @@ struct Snapshot: AsyncParsableCommand {
         let windowsByDisplay = captureVisibleWindows()
         let focusedDisplayID = activeDisplayID()
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let hooksDir = dataDir.map { $0 + "/hooks" }
         let capture = ScreenContextCapture()
 
         // Set up store if data-dir provided
@@ -72,9 +71,9 @@ struct Snapshot: AsyncParsableCommand {
                 false
             }
 
-            let hookContext: String? = if isFocused, let hooksDir {
+            let hookContext: String? = if isFocused, let dataDir {
                 runAppContextHook(
-                    dataDir: hooksDir,
+                    dataDir: dataDir,
                     appName: windowInfo?.appName ?? "Unknown",
                     windowTitle: windowInfo?.windowTitle ?? "",
                     pid: windowInfo?.pid ?? 0
