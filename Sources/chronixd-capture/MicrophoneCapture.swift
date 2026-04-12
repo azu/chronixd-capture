@@ -64,10 +64,24 @@ final class MicrophoneCapture: @unchecked Sendable {
 
     // MARK: Private
 
+    private func sendSilentBuffer(frameLength: AVAudioFrameCount) {
+        let frameCapacity = AVAudioFrameCount(
+            ceil(Double(frameLength) * targetFormat.sampleRate / converter.inputFormat.sampleRate)
+        )
+        guard frameCapacity > 0,
+              let silentBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: frameCapacity) else { return }
+        silentBuffer.frameLength = frameCapacity
+        // Buffer is already zero-filled on creation
+        inputContinuation.yield(AnalyzerInput(buffer: silentBuffer))
+    }
+
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard !isMuted else {
+        if isMuted {
             inSpeech = false
             silenceStartTime = nil
+            // Send a silent buffer to keep SpeechAnalyzer alive and avoid
+            // internal CheckedThrowingContinuation leaks in the Speech framework.
+            sendSilentBuffer(frameLength: buffer.frameLength)
             return
         }
         // Voice Activity Detection: detect silence -> speech transition
