@@ -75,6 +75,13 @@ chronixd-capture context --data-dir ~/chronixd-data --last 30m --detail | claude
 | Structured data (NDJSON) | `{data-dir}/captures/` | Persistent |
 | Summaries (NDJSON) | `{data-dir}/summaries/` | Persistent (written by external tools) |
 
+### Install
+
+```bash
+VERSION=$(basename $(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/azu/chronixd-capture/releases/latest))
+curl -fsSL "https://github.com/azu/chronixd-capture/releases/download/${VERSION}/chronixd-capture-${VERSION}.tar.gz" | tar xz -C /usr/local/bin
+```
+
 ### Building
 
 ```bash
