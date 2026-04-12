@@ -192,7 +192,7 @@ private let browserAppNames = Set([
 /// Extract URL from a browser's address bar via Accessibility API.
 /// First tries AXComboBox/AXTextField (address bar value), then falls back to
 /// AXWebArea's AXURL attribute which works reliably for Firefox and Arc.
-private func axBrowserURL(for pid: Int32) -> String? {
+func axBrowserURL(for pid: Int32) -> String? {
     let axApp = AXUIElementCreateApplication(pid)
 
     // Strategy 1: Find URL bar (AXComboBox/AXTextField/AXStaticText)
@@ -273,7 +273,7 @@ private func looksLikeURL(_ value: String) -> Bool {
 /// Uses NSWorkspace.frontmostApplication to get the actual focused app, then finds its
 /// topmost window via CGWindowList to determine the display.
 @MainActor
-private func activeDisplayID() -> CGDirectDisplayID {
+func activeDisplayID() -> CGDirectDisplayID {
     guard let frontApp = NSWorkspace.shared.frontmostApplication else {
         return CGMainDisplayID()
     }
@@ -428,7 +428,7 @@ private func captureDisplayImage(_ display: SCDisplay) async throws -> CGImage {
 }
 
 /// Returns seconds since last keyboard or mouse event.
-private func systemIdleSeconds() -> Double {
+func systemIdleSeconds() -> Double {
     let mouse = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved)
     let key = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
     let click = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
@@ -439,7 +439,7 @@ private func systemIdleSeconds() -> Double {
 /// Extract normalized vertical scroll position (0.0–1.0) from the frontmost window's scroll area.
 /// Strategy 1: AXVerticalScrollBar AXValue (native apps like Safari, Xcode).
 /// Strategy 2: Compare AXScrollArea frame vs content child frame (Firefox, Chromium-based browsers).
-private func axScrollPosition(for pid: Int32) -> Double? {
+func axScrollPosition(for pid: Int32) -> Double? {
     let axApp = AXUIElementCreateApplication(pid)
 
     var focusedWindowRef: CFTypeRef?

@@ -14,6 +14,7 @@ import ArgumentParser
             Cameras.self,
             Capture.self,
             Context.self,
+            Snapshot.self,
         ],
         defaultSubcommand: Transcribe.self
     )

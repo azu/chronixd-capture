@@ -470,7 +470,7 @@ private final class DedupState: @unchecked Sendable {
 
 /// Run a hook script at `{dataDir}/hooks/{appName}` if it exists and is executable.
 /// Arguments: $1 = windowTitle, $2 = pid. Timeout: 2 seconds.
-private func runAppContextHook(dataDir: String, appName: String, windowTitle: String, pid: Int32) -> String? {
+func runAppContextHook(dataDir: String, appName: String, windowTitle: String, pid: Int32) -> String? {
     let hookPath = (dataDir as NSString).appendingPathComponent("hooks/\(appName)")
     guard FileManager.default.isExecutableFile(atPath: hookPath) else { return nil }
 
@@ -509,7 +509,7 @@ private func runAppContextHook(dataDir: String, appName: String, windowTitle: St
 
 // MARK: - Helpers
 
-private func normalizeURL(_ url: String?) -> String? {
+func normalizeURL(_ url: String?) -> String? {
     guard let url, !url.isEmpty else { return nil }
     if url.contains("://") { return url }
     return "https://" + url
