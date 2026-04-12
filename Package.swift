@@ -6,8 +6,8 @@ let package = Package(
     name: "chronixd-capture",
     platforms: [.macOS("26")],
     products: [
-        .executable(name: "chronixd-capture-cli", targets: ["yap"]),
-        .executable(name: "chronixd-capture", targets: ["chronixd-capture"]),
+        .executable(name: "chronixd-capture", targets: ["yap"]),
+        .executable(name: "chronixd-captured", targets: ["chronixd-capture"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),

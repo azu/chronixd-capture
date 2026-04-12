@@ -14,7 +14,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 # Build release binary
 swift build --disable-sandbox -c release --package-path "$PROJECT_DIR"
 
-BINARY="$PROJECT_DIR/.build/arm64-apple-macosx/release/$APP_NAME"
+BINARY="$PROJECT_DIR/.build/arm64-apple-macosx/release/chronixd-captured"
 if [ ! -f "$BINARY" ]; then
     echo "error: binary not found at $BINARY"
     exit 1
