@@ -1,17 +1,17 @@
 import ArgumentParser
 
-// MARK: - yap
+// MARK: - chronixd-capture
 
-@main struct Yap: AsyncParsableCommand {
+@main struct ChronixdCaptureCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "A CLI for on-device speech transcription.",
+        commandName: "chronixd-capture",
+        abstract: "A CLI for screen context capture and querying.",
         subcommands: [
-            Transcribe.self,
-            Listen.self,
-            Dictate.self,
-            ListenAndDictate.self,
-            MCP_Command.self,
+            Cameras.self,
+            Capture.self,
+            Context.self,
+            Snapshot.self,
         ],
-        defaultSubcommand: Transcribe.self
+        defaultSubcommand: Capture.self
     )
 }
