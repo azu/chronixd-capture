@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import Accelerate
 import Speech
 
 // MARK: - MicrophoneCapture
@@ -15,11 +16,11 @@ final class MicrophoneCapture: @unchecked Sendable {
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         guard inputFormat.sampleRate > 0 else {
-            throw MicrophoneCaptureError.microphonePermissionDenied
+            throw CaptureError.microphonePermissionDenied
         }
 
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
-            throw MicrophoneCaptureError.noCompatibleAudioFormat
+            throw CaptureError.noCompatibleAudioFormat
         }
         self.converter = converter
 
@@ -38,7 +39,7 @@ final class MicrophoneCapture: @unchecked Sendable {
     /// When true, audio buffers are discarded (not sent to speech recognizer).
     nonisolated(unsafe) var isMuted: Bool = false
 
-    /// Called when voice activity starts (silence -> speech transition).
+    /// Called when voice activity starts (silence → speech transition).
     nonisolated(unsafe) var onSpeechStart: (() -> Void)?
     /// RMS threshold for voice activity detection.
     private let vadThreshold: Float = 0.01
@@ -58,7 +59,7 @@ final class MicrophoneCapture: @unchecked Sendable {
         do {
             try audioEngine.start()
         } catch {
-            throw MicrophoneCaptureError.microphonePermissionDenied
+            throw CaptureError.microphonePermissionDenied
         }
     }
 
@@ -84,16 +85,12 @@ final class MicrophoneCapture: @unchecked Sendable {
             sendSilentBuffer(frameLength: buffer.frameLength)
             return
         }
-        // Voice Activity Detection: detect silence -> speech transition
-        // Only triggers once per speech segment (requires sustained silence to reset)
+        // Voice Activity Detection: detect silence → speech transition
         if let channelData = buffer.floatChannelData {
             let frames = Int(buffer.frameLength)
-            var sum: Float = 0
-            for i in 0..<frames {
-                let sample = channelData[0][i]
-                sum += sample * sample
-            }
-            let rms = sqrt(sum / Float(max(frames, 1)))
+            var sumOfSquares: Float = 0
+            vDSP_svesq(channelData[0], 1, &sumOfSquares, vDSP_Length(frames))
+            let rms = sqrt(sumOfSquares / Float(max(frames, 1)))
             if rms > vadThreshold {
                 silenceStartTime = nil
                 if !inSpeech {
@@ -129,22 +126,6 @@ final class MicrophoneCapture: @unchecked Sendable {
 
         if error == nil, convertedBuffer.frameLength > 0 {
             inputContinuation.yield(AnalyzerInput(buffer: convertedBuffer))
-        }
-    }
-}
-
-// MARK: - MicrophoneCaptureError
-
-enum MicrophoneCaptureError: Swift.Error, LocalizedError {
-    case microphonePermissionDenied
-    case noCompatibleAudioFormat
-
-    var errorDescription: String? {
-        switch self {
-        case .microphonePermissionDenied:
-            "Microphone permission is required. Grant it in System Settings > Privacy & Security > Microphone."
-        case .noCompatibleAudioFormat:
-            "No compatible audio format available for speech recognition."
         }
     }
 }

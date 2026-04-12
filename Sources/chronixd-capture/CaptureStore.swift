@@ -8,7 +8,6 @@ final class CaptureStore: Sendable {
 
     var capturesDir: String { dataDir + "/captures/" }
     var summariesDir: String { dataDir + "/summaries/" }
-    var hooksDir: String { dataDir + "/hooks/" }
     var tmpDir: String { NSTemporaryDirectory() + "chronixd-capture/" + sessionID + "/" }
     var screenshotsDir: String { tmpDir + "screenshots/" }
     var camerasDir: String { tmpDir + "cameras/" }
@@ -26,7 +25,6 @@ final class CaptureStore: Sendable {
         let fm = FileManager.default
         try fm.createDirectory(atPath: capturesDir, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: summariesDir, withIntermediateDirectories: true)
-        try fm.createDirectory(atPath: hooksDir, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: screenshotsDir, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: camerasDir, withIntermediateDirectories: true)
     }

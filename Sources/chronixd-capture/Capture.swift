@@ -454,15 +454,38 @@ private struct DedupKey: Equatable {
 
 private final class DedupState: @unchecked Sendable {
     private let lock = NSLock()
-    private var lastKeys: [CGDirectDisplayID: DedupKey] = [:]
+    private var lastKeys: [CGDirectDisplayID: (key: DedupKey, recordedAt: Date)] = [:]
 
+    /// Returns true if this capture should be skipped.
+    /// Dedup is suppressed (= record anyway) when the user has interacted since the last capture.
     func isDuplicate(displayID: CGDirectDisplayID, key: DedupKey) -> Bool {
+        let now = Date()
         lock.lock()
-        defer {
-            lastKeys[displayID] = key
-            lock.unlock()
+        defer { lock.unlock() }
+        guard let last = lastKeys[displayID], last.key == key else {
+            // Different screen — always record
+            lastKeys[displayID] = (key: key, recordedAt: now)
+            return false
         }
-        return lastKeys[displayID] == key
+        // Same screen — record if user has been active since last capture
+        let elapsed = now.timeIntervalSince(last.recordedAt)
+        if Self.hasUserActivity(within: elapsed) {
+            lastKeys[displayID] = (key: key, recordedAt: now)
+            return false
+        }
+        return true
+    }
+
+    /// Check if any user input (scroll, mouse move, click, or key press) occurred within the given interval.
+    private static func hasUserActivity(within seconds: TimeInterval) -> Bool {
+        let eventTypes: [CGEventType] = [.scrollWheel, .mouseMoved, .leftMouseDown, .keyDown]
+        for eventType in eventTypes {
+            let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: eventType)
+            if idle < seconds {
+                return true
+            }
+        }
+        return false
     }
 }
 
