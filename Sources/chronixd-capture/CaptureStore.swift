@@ -31,7 +31,19 @@ final class CaptureStore: Sendable {
         try fm.createDirectory(atPath: camerasDir, withIntermediateDirectories: true)
     }
 
-    /// Append records to the daily NDJSON file (e.g. 2026-03-22.ndjson).
+    /// Short hostname used to partition NDJSON files per machine, avoiding git merge conflicts.
+    /// Normalized to lowercase alphanumeric and hyphens only.
+    private static let hostname: String = {
+        let raw = ProcessInfo.processInfo.hostName
+            .components(separatedBy: ".").first ?? "unknown"
+        let normalized = raw.lowercased()
+            .replacing(/[^a-z0-9\-]/, with: "-")
+            .replacing(/\-{2,}/, with: "-")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return normalized.isEmpty ? "unknown" : normalized
+    }()
+
+    /// Append records to the daily per-host NDJSON file (e.g. 2026-03-22_macbook.ndjson).
     func writeCapture(records: [any CaptureRecord], timestamp: Date) throws {
         let lines = try records.map { try CaptureRecordCoder.encode($0) }
         let content = lines.joined(separator: "\n") + "\n"
@@ -39,7 +51,7 @@ final class CaptureStore: Sendable {
 
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        let filename = "\(formatter.string(from: timestamp)).ndjson"
+        let filename = "\(formatter.string(from: timestamp))_\(Self.hostname).ndjson"
         let path = capturesDir + filename
 
         if FileManager.default.fileExists(atPath: path) {
