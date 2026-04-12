@@ -192,7 +192,7 @@ struct Context: ParsableCommand {
     // MARK: - Schema
 
     static let schemaText = """
-    yap context outputs NDJSON (one JSON object per line). Each record has a "type" field.
+    chronixd-capture context outputs NDJSON (one JSON object per line). Each record has a "type" field.
 
     ## Record Types
 
@@ -222,7 +222,7 @@ struct Context: ParsableCommand {
     - text: string — transcribed text
 
     ### camera
-    Camera image metadata (when --camera is used with yap capture).
+    Camera image metadata (when --camera is used with chronixd-capture capture).
     - type: "camera"
     - id: string — unique ID
     - unixTimeMs: number — capture timestamp (Unix ms)
@@ -241,13 +241,13 @@ struct Context: ParsableCommand {
     ## Usage
 
     # Get last 30 minutes of activity
-    yap context --data-dir <path> --last 30m
+    chronixd-capture-cli context --data-dir <path> --last 30m
 
     # Get full details including file paths
-    yap context --data-dir <path> --last 30m --detail
+    chronixd-capture-cli context --data-dir <path> --last 30m --detail
 
     # Specific time range
-    yap context --data-dir <path> --from 10:00 --to 11:00
+    chronixd-capture-cli context --data-dir <path> --from 10:00 --to 11:00
 
     ## Tips for analysis
     - Records are sorted by timestamp

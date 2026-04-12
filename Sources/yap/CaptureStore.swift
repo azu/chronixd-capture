@@ -8,12 +8,12 @@ final class CaptureStore: Sendable {
 
     var capturesDir: String { dataDir + "/captures/" }
     var summariesDir: String { dataDir + "/summaries/" }
-    var tmpDir: String { NSTemporaryDirectory() + "yap/" + sessionID + "/" }
+    var tmpDir: String { NSTemporaryDirectory() + "chronixd-capture/" + sessionID + "/" }
     var screenshotsDir: String { tmpDir + "screenshots/" }
     var camerasDir: String { tmpDir + "cameras/" }
 
-    /// Base directory for all yap tmp files. Used to search for files by ID across sessions.
-    static var tmpBaseDir: String { NSTemporaryDirectory() + "yap/" }
+    /// Base directory for all chronixd-capture tmp files. Used to search for files by ID across sessions.
+    static var tmpBaseDir: String { NSTemporaryDirectory() + "chronixd-capture/" }
 
     init(dataDir: String, sessionID: String = UUID().uuidString) {
         self.dataDir = dataDir

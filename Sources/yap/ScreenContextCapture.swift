@@ -331,8 +331,8 @@ private func captureAllDisplays(
     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     guard !content.displays.isEmpty else { return [] }
 
-    // Create timestamped directory: /tmp/yap/YYYYMMDD-HHmmss/
-    let yapDir = NSTemporaryDirectory() + "yap/"
+    // Create timestamped directory: /tmp/chronixd-capture/YYYYMMDD-HHmmss/
+    let yapDir = NSTemporaryDirectory() + "chronixd-capture/"
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyyMMdd-HHmmss"
     let dir = yapDir + formatter.string(from: Date()) + "/"

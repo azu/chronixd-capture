@@ -63,7 +63,7 @@ struct SummaryRecord: CaptureRecord, Codable, Sendable {
     }
 }
 
-// MARK: - Detail Records (for yap context --detail output, resolved from tmp)
+// MARK: - Detail Records (for chronixd-capture context --detail output, resolved from tmp)
 
 struct ScreenshotDetailRecord: Codable, Sendable {
     let type: CaptureRecordType = .screenshot

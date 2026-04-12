@@ -70,20 +70,20 @@ struct Capture: AsyncParsableCommand {
 
         // Permission checks
         guard SpeechTranscriber.isAvailable else {
-            throw Transcribe.Error.speechTranscriberNotAvailable
+            throw CaptureError.speechTranscriberNotAvailable
         }
 
         // Microphone permission (checked by trying to start audio engine)
         // Accessibility permission
         guard AXIsProcessTrusted() else {
-            throw DictateError.accessibilityPermissionDenied
+            throw CaptureError.accessibilityPermissionDenied
         }
 
         // Screen recording permission
         do {
             _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         } catch {
-            throw DictateError.screenRecordingPermissionDenied
+            throw CaptureError.screenRecordingPermissionDenied
         }
 
         // Camera permission if needed
@@ -97,7 +97,7 @@ struct Capture: AsyncParsableCommand {
         // Locale check
         let supportedLocales = await SpeechTranscriber.supportedLocales
         guard supportedLocales.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) else {
-            throw Transcribe.Error.unsupportedLocale
+            throw CaptureError.unsupportedLocale
         }
 
         for loc in await AssetInventory.reservedLocales {
@@ -154,7 +154,7 @@ struct Capture: AsyncParsableCommand {
         guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
             compatibleWith: modules
         ) else {
-            throw DictateError.noCompatibleAudioFormat
+            throw CaptureError.noCompatibleAudioFormat
         }
 
         let capture = try MicrophoneCapture(

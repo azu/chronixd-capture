@@ -92,7 +92,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
                 }
             }
             objc_setAssociatedObject(output, "delegate", delegate, .OBJC_ASSOCIATION_RETAIN)
-            output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "yap.camera.\(device.uniqueID)"))
+            output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "chronixd-capture.camera.\(device.uniqueID)"))
             session.startRunning()
 
             // Timeout: return nil after 3 seconds
