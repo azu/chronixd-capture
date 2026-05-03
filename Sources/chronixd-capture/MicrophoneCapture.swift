@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Accelerate
+import Foundation
 import Speech
 
 // MARK: - MicrophoneCapture
@@ -10,31 +11,46 @@ final class MicrophoneCapture: @unchecked Sendable {
     init(targetFormat: AVAudioFormat, inputContinuation: AsyncStream<AnalyzerInput>.Continuation) throws {
         self.targetFormat = targetFormat
         self.inputContinuation = inputContinuation
-        audioEngine = AVAudioEngine()
+        let engine = AVAudioEngine()
+        audioEngine = engine
 
-        let inputNode = audioEngine.inputNode
+        let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
-
         guard inputFormat.sampleRate > 0 else {
             throw CaptureError.microphonePermissionDenied
         }
-
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+        guard let initialConverter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw CaptureError.noCompatibleAudioFormat
         }
-        self.converter = converter
+        converter = initialConverter
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [self] buffer, _ in
-            handleBuffer(buffer)
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+            self?.handleBuffer(buffer)
+        }
+
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
+    }
+
+    deinit {
+        if let observer = configChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 
     // MARK: Internal
 
     let audioEngine: AVAudioEngine
-    let converter: AVAudioConverter
     let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
     let targetFormat: AVAudioFormat
+    nonisolated(unsafe) private(set) var converter: AVAudioConverter
+    nonisolated(unsafe) private var configChangeObserver: NSObjectProtocol?
+    private let reconfigureLock = NSLock()
 
     /// When true, audio buffers are discarded (not sent to speech recognizer).
     nonisolated(unsafe) var isMuted: Bool = false
@@ -64,6 +80,45 @@ final class MicrophoneCapture: @unchecked Sendable {
     }
 
     // MARK: Private
+
+    private func handleConfigurationChange() {
+        reconfigureLock.lock()
+        defer { reconfigureLock.unlock() }
+
+        let inputNode = audioEngine.inputNode
+        inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+
+        let newInputFormat = inputNode.outputFormat(forBus: 0)
+        guard newInputFormat.sampleRate > 0 else {
+            if isatty(STDERR_FILENO) != 0 {
+                FileHandle.standardError.write(Data("[capture] Audio engine reconfigured but input has no sample rate; skipping restart\n".utf8))
+            }
+            return
+        }
+        guard let newConverter = AVAudioConverter(from: newInputFormat, to: targetFormat) else {
+            if isatty(STDERR_FILENO) != 0 {
+                FileHandle.standardError.write(Data("[capture] Failed to rebuild AVAudioConverter after configuration change\n".utf8))
+            }
+            return
+        }
+        converter = newConverter
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+            self?.handleBuffer(buffer)
+        }
+
+        do {
+            try audioEngine.start()
+            if isatty(STDERR_FILENO) != 0 {
+                FileHandle.standardError.write(Data("[capture] Audio engine restarted after configuration change (sampleRate=\(newInputFormat.sampleRate))\n".utf8))
+            }
+        } catch {
+            if isatty(STDERR_FILENO) != 0 {
+                FileHandle.standardError.write(Data("[capture] Failed to restart audio engine after configuration change: \(error)\n".utf8))
+            }
+        }
+    }
 
     private func sendSilentBuffer(frameLength: AVAudioFrameCount) {
         let frameCapacity = AVAudioFrameCount(
