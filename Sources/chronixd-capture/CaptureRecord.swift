@@ -46,9 +46,7 @@ struct TranscriptionRecord: CaptureRecord, Codable, Sendable {
     let text: String
 
     enum CodingKeys: String, CodingKey {
-        case type, unixTimeMs, text, rms, device
-        case endUnixTimeMs = "end_unix_time_ms"
-        case speakerId = "speaker_id"
+        case type, unixTimeMs, endUnixTimeMs, text, rms, device, speakerId
     }
 }
 
