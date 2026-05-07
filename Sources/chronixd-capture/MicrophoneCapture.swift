@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Accelerate
+import CoreAudio
 import Foundation
 import Speech
 
@@ -23,6 +24,8 @@ final class MicrophoneCapture: @unchecked Sendable {
             throw CaptureError.noCompatibleAudioFormat
         }
         converter = initialConverter
+        inputSampleRate = inputFormat.sampleRate
+        currentDeviceName = Self.currentInputDeviceName()
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
             self?.handleBuffer(buffer)
@@ -66,6 +69,21 @@ final class MicrophoneCapture: @unchecked Sendable {
     /// Timestamp when silence started.
     nonisolated(unsafe) private var silenceStartTime: Date?
 
+    /// Current input device's localized name. nil if lookup fails.
+    nonisolated(unsafe) private(set) var currentDeviceName: String?
+    /// Sample rate of the input format. Used to compute audio time for RMS samples.
+    nonisolated(unsafe) private var inputSampleRate: Double = 0
+    /// Cumulative frames yielded to SpeechAnalyzer (in target sample rate units).
+    /// Used as the audio timeline that aligns with `SpeechTranscriber.Result.range`.
+    nonisolated(unsafe) private var framesSentToAnalyzer: AVAudioFramePosition = 0
+    private let rmsBuffer = RMSRingBuffer()
+
+    /// Returns the average RMS over `[startSec, endSec]` of the audio timeline.
+    /// Returns nil if no samples fall within the range.
+    func averageRMS(fromAudioTimeSec startSec: Double, toAudioTimeSec endSec: Double) -> Float? {
+        rmsBuffer.average(from: startSec, to: endSec)
+    }
+
     func stop() {
         audioEngine.stop()
         inputContinuation.finish()
@@ -103,6 +121,8 @@ final class MicrophoneCapture: @unchecked Sendable {
             return
         }
         converter = newConverter
+        inputSampleRate = newInputFormat.sampleRate
+        currentDeviceName = Self.currentInputDeviceName()
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
             self?.handleBuffer(buffer)
@@ -129,6 +149,7 @@ final class MicrophoneCapture: @unchecked Sendable {
         silentBuffer.frameLength = frameCapacity
         // Buffer is already zero-filled on creation
         inputContinuation.yield(AnalyzerInput(buffer: silentBuffer))
+        recordRMS(0, framesAdvanced: silentBuffer.frameLength)
     }
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -141,11 +162,12 @@ final class MicrophoneCapture: @unchecked Sendable {
             return
         }
         // Voice Activity Detection: detect silence → speech transition
+        var rms: Float = 0
         if let channelData = buffer.floatChannelData {
             let frames = Int(buffer.frameLength)
             var sumOfSquares: Float = 0
             vDSP_svesq(channelData[0], 1, &sumOfSquares, vDSP_Length(frames))
-            let rms = sqrt(sumOfSquares / Float(max(frames, 1)))
+            rms = sqrt(sumOfSquares / Float(max(frames, 1)))
             if rms > vadThreshold {
                 silenceStartTime = nil
                 if !inSpeech {
@@ -181,6 +203,88 @@ final class MicrophoneCapture: @unchecked Sendable {
 
         if error == nil, convertedBuffer.frameLength > 0 {
             inputContinuation.yield(AnalyzerInput(buffer: convertedBuffer))
+            recordRMS(rms, framesAdvanced: convertedBuffer.frameLength)
         }
+    }
+
+    /// Append the RMS sample at the midpoint of the most recently yielded buffer
+    /// and advance the analyzer-side audio timeline by `framesAdvanced` frames.
+    private func recordRMS(_ rms: Float, framesAdvanced: AVAudioFrameCount) {
+        guard targetFormat.sampleRate > 0 else { return }
+        let midFrame = framesSentToAnalyzer + AVAudioFramePosition(framesAdvanced / 2)
+        let midTimeSec = Double(midFrame) / targetFormat.sampleRate
+        rmsBuffer.append(audioTimeSec: midTimeSec, rms: rms)
+        framesSentToAnalyzer += AVAudioFramePosition(framesAdvanced)
+    }
+
+    private static func currentInputDeviceName() -> String? {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var defaultAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let getStatus = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultAddr,
+            0, nil,
+            &size,
+            &deviceID
+        )
+        guard getStatus == noErr, deviceID != 0 else { return nil }
+
+        var nameAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var name: Unmanaged<CFString>?
+        var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let nameStatus = withUnsafeMutablePointer(to: &name) { ptr -> OSStatus in
+            ptr.withMemoryRebound(to: UInt8.self, capacity: Int(nameSize)) { rawPtr in
+                AudioObjectGetPropertyData(deviceID, &nameAddr, 0, nil, &nameSize, rawPtr)
+            }
+        }
+        guard nameStatus == noErr, let unmanaged = name else { return nil }
+        return unmanaged.takeRetainedValue() as String
+    }
+}
+
+// MARK: - RMSRingBuffer
+
+private final class RMSRingBuffer: @unchecked Sendable {
+    private struct Sample {
+        let audioTimeSec: Double
+        let rms: Float
+    }
+
+    private let lock = NSLock()
+    private var samples: [Sample] = []
+    /// Drop samples older than this many seconds before the newest sample.
+    private let retentionSec: Double = 60.0
+
+    func append(audioTimeSec: Double, rms: Float) {
+        lock.lock()
+        defer { lock.unlock() }
+        samples.append(Sample(audioTimeSec: audioTimeSec, rms: rms))
+        let cutoff = audioTimeSec - retentionSec
+        if let firstFresh = samples.firstIndex(where: { $0.audioTimeSec >= cutoff }), firstFresh > 0 {
+            samples.removeFirst(firstFresh)
+        }
+    }
+
+    func average(from startSec: Double, to endSec: Double) -> Float? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard endSec >= startSec else { return nil }
+        var sum: Double = 0
+        var count = 0
+        for sample in samples where sample.audioTimeSec >= startSec && sample.audioTimeSec <= endSec {
+            sum += Double(sample.rms)
+            count += 1
+        }
+        guard count > 0 else { return nil }
+        return Float(sum / Double(count))
     }
 }

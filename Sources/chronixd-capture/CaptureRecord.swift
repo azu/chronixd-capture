@@ -39,10 +39,14 @@ struct ScreenshotRecord: CaptureRecord, Codable, Sendable {
 struct TranscriptionRecord: CaptureRecord, Codable, Sendable {
     let type: CaptureRecordType = .transcription
     let unixTimeMs: Int64
+    let endUnixTimeMs: Int64
+    let rms: Float?
+    let device: String?
     let text: String
 
     enum CodingKeys: String, CodingKey {
-        case type, unixTimeMs, text
+        case type, unixTimeMs, text, rms, device
+        case endUnixTimeMs = "end_unix_time_ms"
     }
 }
 

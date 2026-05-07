@@ -163,6 +163,7 @@ struct Capture: AsyncParsableCommand {
         )
         try capture.start()
         try await analyzer.start(inputSequence: inputSequence)
+        let engineStartUnixMs = Int64(Date().timeIntervalSince1970 * 1000)
 
         // Set up CaptureStore
         let store = CaptureStore(dataDir: dataDir)
@@ -234,13 +235,26 @@ struct Capture: AsyncParsableCommand {
         }
 
         // Background task 1: consume transcriber results into buffer
+        let consumeCapture = capture
         let consumeTask = Task.detached {
             do {
                 for try await result in transcriber.results {
                     let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { continue }
-                    let timeMs = Int64(Date().timeIntervalSince1970 * 1000)
-                    transcriptionBuffer.append(TranscriptionSegment(unixTimeMs: timeMs, text: text))
+                    let startSec = result.range.start.seconds
+                    let durSec = result.range.duration.seconds
+                    let endSec = startSec + durSec
+                    let startMs = engineStartUnixMs + Int64(startSec * 1000)
+                    let endMs = engineStartUnixMs + Int64(endSec * 1000)
+                    let rms = consumeCapture.averageRMS(fromAudioTimeSec: startSec, toAudioTimeSec: endSec)
+                    let device = consumeCapture.currentDeviceName
+                    transcriptionBuffer.append(TranscriptionSegment(
+                        startUnixMs: startMs,
+                        endUnixMs: endMs,
+                        text: text,
+                        rms: rms,
+                        device: device
+                    ))
                 }
             } catch {
                 // Transcriber ended (e.g. after finalize)
@@ -334,7 +348,10 @@ struct Capture: AsyncParsableCommand {
                 // Transcription records
                 for segment in segments {
                     records.append(TranscriptionRecord(
-                        unixTimeMs: segment.unixTimeMs,
+                        unixTimeMs: segment.startUnixMs,
+                        endUnixTimeMs: segment.endUnixMs,
+                        rms: segment.rms,
+                        device: segment.device,
                         text: segment.text
                     ))
                 }
@@ -417,8 +434,11 @@ struct Capture: AsyncParsableCommand {
 // MARK: - TranscriptionSegment
 
 private struct TranscriptionSegment: Sendable {
-    let unixTimeMs: Int64
+    let startUnixMs: Int64
+    let endUnixMs: Int64
     let text: String
+    let rms: Float?
+    let device: String?
 }
 
 // MARK: - TranscriptionBuffer
