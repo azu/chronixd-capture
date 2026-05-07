@@ -71,11 +71,25 @@ struct Capture: AsyncParsableCommand {
     }
 
     static func extractFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {
-        guard buffer.format.commonFormat == .pcmFormatFloat32 else { return nil }
-        guard let channelData = buffer.floatChannelData else { return nil }
         let frames = Int(buffer.frameLength)
-        let ptr = UnsafeBufferPointer(start: channelData[0], count: frames)
-        return Array(ptr)
+        guard frames > 0 else { return nil }
+        switch buffer.format.commonFormat {
+        case .pcmFormatFloat32:
+            guard let channelData = buffer.floatChannelData else { return nil }
+            return Array(UnsafeBufferPointer(start: channelData[0], count: frames))
+        case .pcmFormatInt16:
+            guard let channelData = buffer.int16ChannelData else { return nil }
+            let ptr = UnsafeBufferPointer(start: channelData[0], count: frames)
+            // Normalize Int16 to Float32 in [-1.0, 1.0]
+            let scale: Float = 1.0 / 32768.0
+            var samples = [Float](repeating: 0, count: frames)
+            for i in 0..<frames {
+                samples[i] = Float(ptr[i]) * scale
+            }
+            return samples
+        default:
+            return nil
+        }
     }
 
     @MainActor mutating func run() async throws {
@@ -173,14 +187,14 @@ struct Capture: AsyncParsableCommand {
         // Initialize speaker diarization (default-on, opt out with --no-diarize)
         let formatOK = targetFormat.sampleRate == 16000
             && targetFormat.channelCount == 1
-            && targetFormat.commonFormat == .pcmFormatFloat32
+            && (targetFormat.commonFormat == .pcmFormatFloat32 || targetFormat.commonFormat == .pcmFormatInt16)
         let diarization: DiarizationStream?
         if noDiarize {
             diarization = nil
         } else if !formatOK {
             if isatty(STDERR_FILENO) != 0 {
                 FileHandle.standardError.write(Data(
-                    "[diarize] Skipped: targetFormat is not 16kHz mono Float32 (sampleRate=\(targetFormat.sampleRate), channels=\(targetFormat.channelCount))\n".utf8
+                    "[diarize] Skipped: targetFormat is not 16kHz mono Float32/Int16 (sampleRate=\(targetFormat.sampleRate), channels=\(targetFormat.channelCount), format=\(targetFormat.commonFormat.rawValue))\n".utf8
                 ))
             }
             diarization = nil
