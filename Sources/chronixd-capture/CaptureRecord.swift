@@ -42,11 +42,13 @@ struct TranscriptionRecord: CaptureRecord, Codable, Sendable {
     let endUnixTimeMs: Int64
     let rms: Float?
     let device: String?
+    let speakerId: String?
     let text: String
 
     enum CodingKeys: String, CodingKey {
         case type, unixTimeMs, text, rms, device
         case endUnixTimeMs = "end_unix_time_ms"
+        case speakerId = "speaker_id"
     }
 }
 

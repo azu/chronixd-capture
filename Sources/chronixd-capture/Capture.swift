@@ -352,6 +352,7 @@ struct Capture: AsyncParsableCommand {
                         endUnixTimeMs: segment.endUnixMs,
                         rms: segment.rms,
                         device: segment.device,
+                        speakerId: nil,
                         text: segment.text
                     ))
                 }
