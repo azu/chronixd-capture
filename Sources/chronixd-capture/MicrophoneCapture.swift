@@ -60,6 +60,9 @@ final class MicrophoneCapture: @unchecked Sendable {
 
     /// Called when voice activity starts (silence → speech transition).
     nonisolated(unsafe) var onSpeechStart: (() -> Void)?
+    /// Optional callback fired after each converted buffer is yielded to the analyzer.
+    /// Use to fan out the same audio to a secondary consumer (e.g. diarization).
+    nonisolated(unsafe) var onConvertedBuffer: ((AVAudioPCMBuffer) -> Void)?
     /// RMS threshold for voice activity detection.
     private let vadThreshold: Float = 0.01
     /// Silence duration (seconds) needed to consider speech ended.
@@ -150,6 +153,7 @@ final class MicrophoneCapture: @unchecked Sendable {
         // Buffer is already zero-filled on creation
         inputContinuation.yield(AnalyzerInput(buffer: silentBuffer))
         recordRMS(0, framesAdvanced: silentBuffer.frameLength)
+        onConvertedBuffer?(silentBuffer)
     }
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -204,6 +208,7 @@ final class MicrophoneCapture: @unchecked Sendable {
         if error == nil, convertedBuffer.frameLength > 0 {
             inputContinuation.yield(AnalyzerInput(buffer: convertedBuffer))
             recordRMS(rms, framesAdvanced: convertedBuffer.frameLength)
+            onConvertedBuffer?(convertedBuffer)
         }
     }
 
