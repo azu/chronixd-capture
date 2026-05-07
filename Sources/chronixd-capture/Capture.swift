@@ -53,6 +53,11 @@ struct Capture: AsyncParsableCommand {
         help: "Disable deduplication."
     ) var noDedup: Bool = false
 
+    @Flag(
+        name: .long,
+        help: "Disable speaker diarization (FluidAudio Sortformer)."
+    ) var noDiarize: Bool = false
+
     @Option(
         name: .shortAndLong,
         help: "(default: current)",
@@ -63,6 +68,14 @@ struct Capture: AsyncParsableCommand {
         guard interval >= 5 else {
             throw ValidationError("--interval must be at least 5 seconds.")
         }
+    }
+
+    static func extractFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {
+        guard buffer.format.commonFormat == .pcmFormatFloat32 else { return nil }
+        guard let channelData = buffer.floatChannelData else { return nil }
+        let frames = Int(buffer.frameLength)
+        let ptr = UnsafeBufferPointer(start: channelData[0], count: frames)
+        return Array(ptr)
     }
 
     @MainActor mutating func run() async throws {
@@ -157,10 +170,50 @@ struct Capture: AsyncParsableCommand {
             throw CaptureError.noCompatibleAudioFormat
         }
 
+        // Initialize speaker diarization (default-on, opt out with --no-diarize)
+        let formatOK = targetFormat.sampleRate == 16000
+            && targetFormat.channelCount == 1
+            && targetFormat.commonFormat == .pcmFormatFloat32
+        let diarization: DiarizationStream?
+        if noDiarize {
+            diarization = nil
+        } else if !formatOK {
+            if isatty(STDERR_FILENO) != 0 {
+                FileHandle.standardError.write(Data(
+                    "[diarize] Skipped: targetFormat is not 16kHz mono Float32 (sampleRate=\(targetFormat.sampleRate), channels=\(targetFormat.channelCount))\n".utf8
+                ))
+            }
+            diarization = nil
+        } else {
+            if isatty(STDERR_FILENO) != 0 {
+                FileHandle.standardError.write(Data("[diarize] Initializing Sortformer (model download on first run)…\n".utf8))
+            }
+            do {
+                diarization = try await DiarizationStream()
+                if isatty(STDERR_FILENO) != 0 {
+                    FileHandle.standardError.write(Data("[diarize] Ready.\n".utf8))
+                }
+            } catch {
+                if isatty(STDERR_FILENO) != 0 {
+                    FileHandle.standardError.write(Data("[diarize] Init failed (\(error)). Continuing without speaker diarization.\n".utf8))
+                }
+                diarization = nil
+            }
+        }
+
         let capture = try MicrophoneCapture(
             targetFormat: targetFormat,
             inputContinuation: inputContinuation
         )
+
+        if let diarization {
+            let diarizationRef = diarization
+            capture.onConvertedBuffer = { buffer in
+                guard let samples = Self.extractFloatSamples(from: buffer) else { return }
+                Task { try? await diarizationRef.addAudio(samples, sourceSampleRate: 16000) }
+            }
+        }
+
         try capture.start()
         try await analyzer.start(inputSequence: inputSequence)
         let engineStartUnixMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -234,8 +287,21 @@ struct Capture: AsyncParsableCommand {
             }
         }
 
+        // Background task: drive Sortformer process() at 1 Hz
+        let diarizationProcessTask: Task<Void, Never>? = if let diarization {
+            Task.detached {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    try? await diarization.processIfReady()
+                }
+            }
+        } else {
+            nil
+        }
+
         // Background task 1: consume transcriber results into buffer
         let consumeCapture = capture
+        let consumeDiarization = diarization
         let consumeTask = Task.detached {
             do {
                 for try await result in transcriber.results {
@@ -248,12 +314,14 @@ struct Capture: AsyncParsableCommand {
                     let endMs = engineStartUnixMs + Int64(endSec * 1000)
                     let rms = consumeCapture.averageRMS(fromAudioTimeSec: startSec, toAudioTimeSec: endSec)
                     let device = consumeCapture.currentDeviceName
+                    let speakerId = await consumeDiarization?.dominantSpeaker(from: startSec, to: endSec)
                     transcriptionBuffer.append(TranscriptionSegment(
                         startUnixMs: startMs,
                         endUnixMs: endMs,
                         text: text,
                         rms: rms,
-                        device: device
+                        device: device,
+                        speakerId: speakerId
                     ))
                 }
             } catch {
@@ -352,7 +420,7 @@ struct Capture: AsyncParsableCommand {
                         endUnixTimeMs: segment.endUnixMs,
                         rms: segment.rms,
                         device: segment.device,
-                        speakerId: nil,
+                        speakerId: segment.speakerId,
                         text: segment.text
                     ))
                 }
@@ -415,6 +483,8 @@ struct Capture: AsyncParsableCommand {
             if !capture.isMuted {
                 try? await analyzer.finalizeAndFinishThroughEndOfInput()
             }
+            diarizationProcessTask?.cancel()
+            try? await diarization?.finalize()
             captureTimerTask.cancel()
             consumeTask.cancel()
             mediaCheckTask.cancel()
@@ -440,6 +510,7 @@ private struct TranscriptionSegment: Sendable {
     let text: String
     let rms: Float?
     let device: String?
+    let speakerId: String?
 }
 
 // MARK: - TranscriptionBuffer
