@@ -208,9 +208,18 @@ struct Capture: AsyncParsableCommand {
 
         if let diarization {
             let diarizationRef = diarization
+            let sampleRate = targetFormat.sampleRate
             capture.onConvertedBuffer = { buffer in
                 guard let samples = Self.extractFloatSamples(from: buffer) else { return }
-                Task { try? await diarizationRef.addAudio(samples, sourceSampleRate: 16000) }
+                Task {
+                    do {
+                        try await diarizationRef.addAudio(samples, sourceSampleRate: sampleRate)
+                    } catch {
+                        if isatty(STDERR_FILENO) != 0 {
+                            FileHandle.standardError.write(Data("[diarize] addAudio failed: \(error)\n".utf8))
+                        }
+                    }
+                }
             }
         }
 
@@ -478,6 +487,7 @@ struct Capture: AsyncParsableCommand {
             if restoreTerminal {
                 tcsetattr(STDIN_FILENO, TCSANOW, &savedTermios)
             }
+            capture.onConvertedBuffer = nil
             capture.stop()
             cameraCapture?.stop()
             if !capture.isMuted {
