@@ -20,6 +20,7 @@ actor DiarizationStream {
     private var segments: [DiarizationSegmentRecord] = []
     /// 直近 5 分のみ保持（メモリ抑制）
     private let retentionSec: Double = 300
+    private var maxObservedEndSec: Double = -.infinity
 
     init() async throws {
         let config = SortformerConfig.default
@@ -56,15 +57,19 @@ actor DiarizationStream {
     // MARK: Private
 
     private func appendSegments(from update: DiarizerTimelineUpdate) {
+        guard !update.finalizedSegments.isEmpty else { return }
         for seg in update.finalizedSegments {
-            segments.append(DiarizationSegmentRecord(
+            let record = DiarizationSegmentRecord(
                 startSec: Double(seg.startTime),
                 endSec: Double(seg.endTime),
                 speakerLabel: seg.speakerLabel
-            ))
+            )
+            segments.append(record)
+            if record.endSec > maxObservedEndSec {
+                maxObservedEndSec = record.endSec
+            }
         }
-        guard let latestEnd = segments.last?.endSec else { return }
-        let cutoff = latestEnd - retentionSec
+        let cutoff = maxObservedEndSec - retentionSec
         if let firstFresh = segments.firstIndex(where: { $0.endSec >= cutoff }), firstFresh > 0 {
             segments.removeFirst(firstFresh)
         }
@@ -85,6 +90,8 @@ actor DiarizationStream {
             guard overlap > 0 else { continue }
             weights[seg.speakerLabel, default: 0] += overlap
         }
-        return weights.max(by: { $0.value < $1.value })?.key
+        return weights.max(by: {
+            $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key
+        })?.key
     }
 }
