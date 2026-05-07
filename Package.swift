@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/tuist/Noora.git", from: "0.40.1"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.9.1"),
     ],
     targets: [
         .executableTarget(
@@ -18,6 +19,7 @@ let package = Package(
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Noora", package: "Noora"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
             ]
         ),
     ]
