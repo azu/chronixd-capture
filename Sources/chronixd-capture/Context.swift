@@ -196,38 +196,49 @@ struct Context: ParsableCommand {
     static let schemaText = """
     chronixd-capture context outputs NDJSON (one JSON object per line). Each record has a "type" field.
 
+    ## Common Fields
+
+    All records (except summary written by external tools and one-shot snapshot) include:
+    - sessionId: string? — 8-char hex identifying one chronixd-capture process invocation. Use to groupBy events from the same session. Resets every restart.
+
     ## Record Types
 
     ### screenshot
     Screen capture metadata. Taken periodically from each display.
     - type: "screenshot"
-    - id: string — unique ID, use with --detail to resolve file paths
+    - id: string — per-record ID (12-char hex), use with --detail to resolve image file path
     - unixTimeMs: number — capture timestamp (Unix ms)
+    - sessionId: string? — see Common Fields
     - app: string — foreground app name
     - title: string? — window title
     - url: string? — browser URL (if applicable)
     - is_focused: boolean — whether this display had user focus
     - is_playing_media: boolean — whether media was detected
+    - app_context: string? — output of {data-dir}/hooks/{appName} script (focused display only)
     - idle_seconds: number? — seconds since last keyboard/mouse input (focused display only)
     - scroll_position: number? — vertical scroll position 0.0–1.0 (focused display only)
 
     With --detail, adds:
     - path: string? — screenshot image file path
     - available: boolean — whether the image file exists
-    - ocr_path: string? — OCR text file path
-    - ocr_available: boolean — whether the OCR file exists
 
     ### transcription
     Speech-to-text from the microphone.
     - type: "transcription"
-    - unixTimeMs: number — speech timestamp (Unix ms)
+    - unixTimeMs: number — segment START timestamp (Unix ms), derived from audio time range
+    - endUnixTimeMs: number — segment END timestamp (Unix ms)
+    - sessionId: string? — see Common Fields
     - text: string — transcribed text
+    - rms: number? — average RMS amplitude over the segment (0.0–1.0). Higher = louder = closer to mic, useful as a self-vs-others heuristic.
+    - device: string? — input device name at capture time (e.g. "MacBook Air Microphone", "AirPods Pro")
+    - speakerId: string? — session-scoped anonymous speaker ID in "{sessionId}_{N}" format (e.g. "a1b2c3d4_0"). Same N within a session = same speaker. Cross-session matching not supported (no global identity).
 
     ### camera
     Camera image metadata (when --camera is used with chronixd-capture capture).
     - type: "camera"
-    - id: string — unique ID
+    - id: string — per-record ID
     - unixTimeMs: number — capture timestamp (Unix ms)
+    - sessionId: string? — see Common Fields
 
     With --detail, adds:
     - path: string? — camera image file path
@@ -238,18 +249,22 @@ struct Context: ParsableCommand {
     - type: "summary"
     - fromUnixTimeMs: number — analysis period start (Unix ms)
     - toUnixTimeMs: number — analysis period end (Unix ms)
+    - sessionId: string? — Optional, written by external tools
     - text: string — analysis text
 
     ## Usage
 
     # Get last 30 minutes of activity
-    chronixd-capture-cli context --data-dir <path> --last 30m
+    chronixd-capture context --data-dir <path> --last 30m
 
     # Get full details including file paths
-    chronixd-capture-cli context --data-dir <path> --last 30m --detail
+    chronixd-capture context --data-dir <path> --last 30m --detail
 
     # Specific time range
-    chronixd-capture-cli context --data-dir <path> --from 10:00 --to 11:00
+    chronixd-capture context --data-dir <path> --from 10:00 --to 11:00
+
+    # Filter by session (downstream)
+    chronixd-capture context --data-dir <path> --last 1h | jq 'select(.sessionId == "a1b2c3d4")'
 
     ## Tips for analysis
     - Records are sorted by timestamp
@@ -258,6 +273,8 @@ struct Context: ParsableCommand {
     - is_focused: true indicates the display the user was actively using
     - idle_seconds: high values (e.g. >60) suggest the user is away; low values mean active interaction
     - scroll_position changes between consecutive records indicate the user is reading/scrolling
+    - speakerId stays stable within one session; "Speaker 0" today vs tomorrow are NOT the same person — use sessionId to scope
+    - rms can hint at self-vs-others (装着マイクの場合、自分の発話は loud、他者は遠くで quiet)
     - Summarize activity in 1-2 sentences per time period
     """
 }
