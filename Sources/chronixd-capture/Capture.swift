@@ -185,6 +185,7 @@ struct Capture: AsyncParsableCommand {
         }
 
         // Initialize speaker diarization (default-on, opt out with --no-diarize)
+        let sessionId = String(UUID().uuidString.prefix(8).lowercased())
         let formatOK = targetFormat.sampleRate == 16000
             && targetFormat.channelCount == 1
             && (targetFormat.commonFormat == .pcmFormatFloat32 || targetFormat.commonFormat == .pcmFormatInt16)
@@ -200,10 +201,10 @@ struct Capture: AsyncParsableCommand {
             diarization = nil
         } else {
             if isatty(STDERR_FILENO) != 0 {
-                FileHandle.standardError.write(Data("[diarize] Initializing Sortformer (model download on first run)…\n".utf8))
+                FileHandle.standardError.write(Data("[diarize] Initializing Sortformer (session=\(sessionId), model download on first run)…\n".utf8))
             }
             do {
-                diarization = try await DiarizationStream()
+                diarization = try await DiarizationStream(sessionId: sessionId)
                 if isatty(STDERR_FILENO) != 0 {
                     FileHandle.standardError.write(Data("[diarize] Ready.\n".utf8))
                 }
