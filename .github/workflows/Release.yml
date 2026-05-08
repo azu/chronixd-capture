@@ -17,9 +17,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Build
-        run: swift build -c release --arch arm64 --product chronixd-capture
+        run: swift build -c release --product chronixd-capture
       - name: Compress
-        run: tar -czf chronixd-capture-${GITHUB_REF_NAME}.tar.gz -C .build/apple/Products/Release chronixd-capture
+        run: tar -czf chronixd-capture-${GITHUB_REF_NAME}.tar.gz -C .build/release chronixd-capture
       - name: Release
         run: gh release create ${GITHUB_REF_NAME} chronixd-capture-${GITHUB_REF_NAME}.tar.gz
         env:
