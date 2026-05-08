@@ -13,11 +13,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           persist-credentials: false
       - name: Build
-        run: swift build -c release --arch arm64 --arch x86_64 --product chronixd-capture
+        run: swift build -c release --arch arm64 --product chronixd-capture
       - name: Compress
         run: tar -czf chronixd-capture-${GITHUB_REF_NAME}.tar.gz -C .build/apple/Products/Release chronixd-capture
       - name: Release
