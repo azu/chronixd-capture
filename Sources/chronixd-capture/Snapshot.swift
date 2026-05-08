@@ -86,6 +86,7 @@ struct Snapshot: AsyncParsableCommand {
             let record = ScreenshotRecord(
                 id: String(recordID),
                 unixTimeMs: nowMs,
+                sessionId: nil,
                 url: normalizeURL(url),
                 app: windowInfo?.appName ?? "Unknown",
                 title: windowInfo?.windowTitle,

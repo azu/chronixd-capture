@@ -79,6 +79,7 @@ struct Context: ParsableCommand {
                     let detailRecord = ScreenshotDetailRecord(
                         id: r.id,
                         unixTimeMs: r.unixTimeMs,
+                        sessionId: r.sessionId,
                         url: r.url,
                         app: r.app,
                         title: r.title,
@@ -97,6 +98,7 @@ struct Context: ParsableCommand {
                     let detailRecord = CameraDetailRecord(
                         id: r.id,
                         unixTimeMs: r.unixTimeMs,
+                        sessionId: r.sessionId,
                         path: paths.camera,
                         available: paths.camera != nil
                     )

@@ -17,6 +17,7 @@ struct ScreenshotRecord: CaptureRecord, Codable, Sendable {
     let type: CaptureRecordType = .screenshot
     let id: String
     let unixTimeMs: Int64
+    let sessionId: String?
     let url: String?
     let app: String
     let title: String?
@@ -27,7 +28,7 @@ struct ScreenshotRecord: CaptureRecord, Codable, Sendable {
     let scrollPosition: Double?
 
     enum CodingKeys: String, CodingKey {
-        case type, id, unixTimeMs, url, app, title
+        case type, id, unixTimeMs, sessionId, url, app, title
         case isFocused = "is_focused"
         case isPlayingMedia = "is_playing_media"
         case appContext = "app_context"
@@ -40,13 +41,14 @@ struct TranscriptionRecord: CaptureRecord, Codable, Sendable {
     let type: CaptureRecordType = .transcription
     let unixTimeMs: Int64
     let endUnixTimeMs: Int64
+    let sessionId: String?
     let rms: Float?
     let device: String?
     let speakerId: String?
     let text: String
 
     enum CodingKeys: String, CodingKey {
-        case type, unixTimeMs, endUnixTimeMs, text, rms, device, speakerId
+        case type, unixTimeMs, endUnixTimeMs, sessionId, text, rms, device, speakerId
     }
 }
 
@@ -54,9 +56,10 @@ struct CameraRecord: CaptureRecord, Codable, Sendable {
     let type: CaptureRecordType = .camera
     let id: String
     let unixTimeMs: Int64
+    let sessionId: String?
 
     enum CodingKeys: String, CodingKey {
-        case type, id, unixTimeMs
+        case type, id, unixTimeMs, sessionId
     }
 }
 
@@ -64,10 +67,11 @@ struct SummaryRecord: CaptureRecord, Codable, Sendable {
     let type: CaptureRecordType = .summary
     let fromUnixTimeMs: Int64
     let toUnixTimeMs: Int64
+    let sessionId: String?
     let text: String
 
     enum CodingKeys: String, CodingKey {
-        case type, fromUnixTimeMs, toUnixTimeMs, text
+        case type, fromUnixTimeMs, toUnixTimeMs, sessionId, text
     }
 }
 
@@ -77,6 +81,7 @@ struct ScreenshotDetailRecord: Codable, Sendable {
     let type: CaptureRecordType = .screenshot
     let id: String
     let unixTimeMs: Int64
+    let sessionId: String?
     let url: String?
     let app: String
     let title: String?
@@ -89,7 +94,7 @@ struct ScreenshotDetailRecord: Codable, Sendable {
     let available: Bool
 
     enum CodingKeys: String, CodingKey {
-        case type, id, unixTimeMs, url, app, title
+        case type, id, unixTimeMs, sessionId, url, app, title
         case isFocused = "is_focused"
         case isPlayingMedia = "is_playing_media"
         case appContext = "app_context"
@@ -103,11 +108,12 @@ struct CameraDetailRecord: Codable, Sendable {
     let type: CaptureRecordType = .camera
     let id: String
     let unixTimeMs: Int64
+    let sessionId: String?
     let path: String?
     let available: Bool
 
     enum CodingKeys: String, CodingKey {
-        case type, id, unixTimeMs, path, available
+        case type, id, unixTimeMs, sessionId, path, available
     }
 }
 

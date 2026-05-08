@@ -426,6 +426,7 @@ struct Capture: AsyncParsableCommand {
                     records.append(ScreenshotRecord(
                         id: String(recordID),
                         unixTimeMs: nowMs,
+                        sessionId: sessionId,
                         url: normalizeURL(display.url),
                         app: display.appName ?? "Unknown",
                         title: display.windowTitle,
@@ -442,6 +443,7 @@ struct Capture: AsyncParsableCommand {
                     records.append(TranscriptionRecord(
                         unixTimeMs: segment.startUnixMs,
                         endUnixTimeMs: segment.endUnixMs,
+                        sessionId: sessionId,
                         rms: segment.rms,
                         device: segment.device,
                         speakerId: segment.speakerId,
@@ -462,7 +464,8 @@ struct Capture: AsyncParsableCommand {
                             if CGImageDestinationFinalize(dest) {
                                 records.append(CameraRecord(
                                     id: String(recordID),
-                                    unixTimeMs: nowMs
+                                    unixTimeMs: nowMs,
+                                    sessionId: sessionId
                                 ))
                             }
                         }
