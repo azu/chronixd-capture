@@ -44,6 +44,7 @@ final class MicrophoneCapture: @unchecked Sendable {
         if let observer = configChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        reconfigureRetryTask?.cancel()
     }
 
     // MARK: Internal
@@ -53,7 +54,9 @@ final class MicrophoneCapture: @unchecked Sendable {
     let targetFormat: AVAudioFormat
     nonisolated(unsafe) private(set) var converter: AVAudioConverter
     nonisolated(unsafe) private var configChangeObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var reconfigureRetryTask: Task<Void, Never>?
     private let reconfigureLock = NSLock()
+    private let maxReconfigureAttempts = 5
 
     /// When true, audio buffers are discarded (not sent to speech recognizer).
     nonisolated(unsafe) var isMuted: Bool = false
@@ -88,6 +91,7 @@ final class MicrophoneCapture: @unchecked Sendable {
     }
 
     func stop() {
+        reconfigureRetryTask?.cancel()
         audioEngine.stop()
         inputContinuation.finish()
     }
@@ -104,6 +108,24 @@ final class MicrophoneCapture: @unchecked Sendable {
 
     private func handleConfigurationChange() {
         reconfigureLock.lock()
+        reconfigureRetryTask?.cancel()
+        let maxAttempts = maxReconfigureAttempts
+        reconfigureRetryTask = Task { [weak self] in
+            guard let self else { return }
+            for attempt in 1...maxAttempts {
+                if Task.isCancelled { return }
+                if self.tryReconfigure(attempt: attempt) { return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            FileHandle.standardError.write(Data(
+                "[capture] Audio engine reconfigure failed after \(maxAttempts) attempts; recording stopped\n".utf8
+            ))
+        }
+        reconfigureLock.unlock()
+    }
+
+    private func tryReconfigure(attempt: Int) -> Bool {
+        reconfigureLock.lock()
         defer { reconfigureLock.unlock() }
 
         let inputNode = audioEngine.inputNode
@@ -113,15 +135,15 @@ final class MicrophoneCapture: @unchecked Sendable {
         let newInputFormat = inputNode.outputFormat(forBus: 0)
         guard newInputFormat.sampleRate > 0 else {
             if isatty(STDERR_FILENO) != 0 {
-                FileHandle.standardError.write(Data("[capture] Audio engine reconfigured but input has no sample rate; skipping restart\n".utf8))
+                FileHandle.standardError.write(Data("[capture] Reconfigure attempt \(attempt): input has no sample rate\n".utf8))
             }
-            return
+            return false
         }
         guard let newConverter = AVAudioConverter(from: newInputFormat, to: targetFormat) else {
             if isatty(STDERR_FILENO) != 0 {
-                FileHandle.standardError.write(Data("[capture] Failed to rebuild AVAudioConverter after configuration change\n".utf8))
+                FileHandle.standardError.write(Data("[capture] Reconfigure attempt \(attempt): failed to rebuild AVAudioConverter\n".utf8))
             }
-            return
+            return false
         }
         converter = newConverter
         inputSampleRate = newInputFormat.sampleRate
@@ -134,12 +156,14 @@ final class MicrophoneCapture: @unchecked Sendable {
         do {
             try audioEngine.start()
             if isatty(STDERR_FILENO) != 0 {
-                FileHandle.standardError.write(Data("[capture] Audio engine restarted after configuration change (sampleRate=\(newInputFormat.sampleRate))\n".utf8))
+                FileHandle.standardError.write(Data("[capture] Audio engine restarted after configuration change (attempt=\(attempt), sampleRate=\(newInputFormat.sampleRate))\n".utf8))
             }
+            return true
         } catch {
             if isatty(STDERR_FILENO) != 0 {
-                FileHandle.standardError.write(Data("[capture] Failed to restart audio engine after configuration change: \(error)\n".utf8))
+                FileHandle.standardError.write(Data("[capture] Reconfigure attempt \(attempt): engine.start() failed: \(error)\n".utf8))
             }
+            return false
         }
     }
 
